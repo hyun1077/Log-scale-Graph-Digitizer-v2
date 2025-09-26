@@ -1,8 +1,8 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // 레포: Log-scale-Graph-Digitizer-  /  앱 폴더: log-digitizer-vite
-  base: '/Log-scale-Graph-Digitizer-/log-digitizer-vite/',
-})
+  // GitHub Pages에서 서브폴더로 배포할 때 필요 (리포 구조 기준)
+  base: '/log-digitizer-vite/'
+});
