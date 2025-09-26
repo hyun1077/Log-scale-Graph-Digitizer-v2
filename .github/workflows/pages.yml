@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: log-digitizer-vite   # ← 서브폴더 지정
+        working-directory: log-digitizer-vite
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +29,6 @@ jobs:
         with:
           node-version: 20
 
-      # package-lock.json이 없거나 옛날일 수 있으니 npm install 사용
       - name: Install deps
         run: npm install
 
@@ -39,7 +38,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: log-digitizer-vite/dist  # ← 빌드 산출물
+          path: log-digitizer-vite/dist
 
   deploy:
     needs: build
