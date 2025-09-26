@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",          // ← 여기만 바꿉니다 (tsc 제거)
+    "build": "vite build",          // ✅ tsc 제거!!
     "preview": "vite preview"
   },
   "dependencies": {
