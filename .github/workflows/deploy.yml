@@ -20,18 +20,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # 👇 하위 폴더에서 설치/빌드 (핵심)
       - name: Install deps
+        working-directory: ./log-digitizer-vite
         run: npm ci || npm i
+
       - name: Build
+        working-directory: ./log-digitizer-vite
         run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist
+          path: ./log-digitizer-vite/dist
 
   deploy:
     needs: build
