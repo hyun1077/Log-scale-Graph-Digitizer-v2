@@ -42,6 +42,10 @@ export default function App() {
   const [connectLines, setConnectLines] = useState(false);
   const [lineWidth, setLineWidth] = useState(1.6);
   const [lineAlpha, setLineAlpha] = useState(0.9);
+  const [smoothLines, setSmoothLines] = useState(false);
+  const [ptRadius, setPtRadius] = useState(4);
+  const [magnifyOn, setMagnifyOn] = useState(false);
+  const [magnifyFactor, setMagnifyFactor] = useState(3);
 
   const [bgList, setBgList] = useState<Array<{ w: number; h: number } | null>>([null, null]);
   const [bgXform, setBgXform] = useState<[BgXf, BgXf]>([
@@ -185,14 +189,20 @@ export default function App() {
         ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
         for (const s of series) {
           if (s.points.length < 2) continue; const pts = [...s.points].sort((a,b)=> a.x===b.x? a.y-b.y : a.x-b.x);
-          const f = dataToPixel(pts[0].x, pts[0].y); ctx.strokeStyle = s.color; ctx.beginPath(); ctx.moveTo(f.px, f.py);
-          for (let i=1;i<pts.length;i++){ const P = dataToPixel(pts[i].x, pts[i].y); ctx.lineTo(P.px, P.py); }
+          const pxPts = pts.map(p=> dataToPixel(p.x,p.y));
+          ctx.strokeStyle = s.color; ctx.beginPath();
+          if (smoothLines && pxPts.length>=2) {
+            catmullRomPath(ctx, pxPts, 0.5);
+          } else {
+            ctx.moveTo(pxPts[0].px, pxPts[0].py);
+            for (let i=1;i<pxPts.length;i++){ ctx.lineTo(pxPts[i].px, pxPts[i].py); }
+          }
           ctx.stroke();
         }
         ctx.globalAlpha = 1; ctx.restore();
       }
 
-      for (const s of series) { ctx.strokeStyle = s.color; for (const p of s.points) { const P = dataToPixel(p.x, p.y); drawCross(ctx, P.px, P.py, 5); } }
+      for (const s of series) { ctx.fillStyle = s.color; ctx.strokeStyle = "#fff"; for (const p of s.points) { const P = dataToPixel(p.x, p.y); ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI*2); ctx.fill(); if(ptRadius>=3){ ctx.lineWidth=1; ctx.stroke(); } } }
 
       if (hoverRef.current.x !== null && hoverRef.current.y !== null) {
         const P = dataToPixel(hoverRef.current.x, hoverRef.current.y), rr = innerRect();
@@ -205,6 +215,16 @@ export default function App() {
       ctx.fillStyle = "#111827"; ctx.font = "14px ui-sans-serif, system-ui"; ctx.textAlign = "center"; ctx.fillText(xLog?"X (10^n)":"X", r.x + r.w/2, r.y + r.h + 34);
       ctx.save(); ctx.translate(r.x-45, r.y + r.h/2); ctx.rotate(-Math.PI/2); ctx.fillText(yLog?"Y (10^n)":"Y", 0, 0); ctx.restore();
 
+      // Magnifier (loupe) overlay
+      if (magnifyOn && hoverRef.current.x!==null && hoverRef.current.y!==null){
+        const hp = dataToPixel(hoverRef.current.x!, hoverRef.current.y!);
+        const sz=90, f=magnifyFactor; const sx=Math.max(0, Math.min(size.w-sz/f, hp.px - sz/(2*f))), sy=Math.max(0, Math.min(size.h-sz/f, hp.py - sz/(2*f)));
+        ctx.save(); ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(c, sx, sy, sz/f, sz/f, size.w - sz - 16, 16, sz, sz);
+        ctx.strokeStyle="#111827"; ctx.lineWidth=2; ctx.strokeRect(size.w - sz - 16, 16, sz, sz);
+        ctx.beginPath(); ctx.moveTo(size.w - sz - 16 + sz/2, 16); ctx.lineTo(size.w - sz - 16 + sz/2, 16+sz); ctx.moveTo(size.w - sz - 16, 16+sz/2); ctx.lineTo(size.w - 16, 16+sz/2); ctx.stroke(); ctx.restore();
+      }
+
       ctx.save(); ctx.font = "12px ui-sans-serif, system-ui"; let lx = r.x + 8, ly = r.y + 16; series.forEach((s,i)=>{ ctx.fillStyle = s.color; ctx.fillRect(lx, ly-8, 10, 10); ctx.fillStyle = "#111827"; ctx.fillText(`${s.name} (${s.points.length})${i===activeSeries?" <-":""}`, lx+16, ly); ly += 16; }); ctx.restore();
     } catch (err) {
       console.error("draw error", err); setToast({ msg: "Render error. Axes reset.", kind: "err" });
@@ -213,6 +233,24 @@ export default function App() {
   }, [size,pad,xMin,xMax,yMin,yMax,xLog,yLog,series,bgList,showAB,opacityAB,activeBg,keepAspect,bgXform,anchorMode,customAnchors,hoverHandle,connectLines,lineWidth,lineAlpha]);
 
   function drawCross(ctx: CanvasRenderingContext2D, x: number, y: number, r = 5) { ctx.save(); ctx.strokeStyle = "#2563EB"; ctx.beginPath(); ctx.moveTo(x-r,y); ctx.lineTo(x+r,y); ctx.moveTo(x,y-r); ctx.lineTo(x,y+r); ctx.stroke(); ctx.restore(); }
+  function catmullRomPath(ctx: CanvasRenderingContext2D, pts: {px:number;py:number}[], alpha=0.5){
+    if(pts.length<2){ const p=pts[0]; ctx.moveTo(p.px,p.py); return; }
+    const p0={...pts[0]}, p1={...pts[0]};
+    const pEnd={...pts[pts.length-1]}, pBeforeEnd={...pts[pts.length-1]};
+    const P=[p1,...pts.slice(1,-1),pBeforeEnd]; // guard
+    ctx.moveTo(pts[0].px, pts[0].py);
+    for(let i=0;i<pts.length-1;i++){
+      const p0= i===0? pts[0] : pts[i-1];
+      const p1= pts[i];
+      const p2= pts[i+1];
+      const p3= i+2<pts.length? pts[i+2] : pts[pts.length-1];
+      const c1x = p1.px + (p2.px - p0.px)/6*(1-alpha);
+      const c1y = p1.py + (p2.py - p0.py)/6*(1-alpha);
+      const c2x = p2.px - (p3.px - p1.px)/6*(1-alpha);
+      const c2y = p2.py - (p3.py - p1.py)/6*(1-alpha);
+      ctx.bezierCurveTo(c1x,c1y,c2x,c2y,p2.px,p2.py);
+    }
+  }
   function numFmt(v:number, step?:number){ if(!isFinite(v)) return ""; const abs=Math.abs(v); if(abs===0) return "0"; const d = step!==undefined? Math.max(0, Math.min(6, -Math.floor(Math.log10(Math.max(1e-12, step))))) : Math.max(0, Math.min(6, 3 - Math.floor(Math.log10(Math.max(1e-12, abs))))); if(abs>=1e5||abs<1e-3) return v.toExponential(2); return v.toFixed(d); }
 
   // pretty label: 10^n with Unicode superscripts
@@ -268,17 +306,11 @@ export default function App() {
       if (overImage(px,py)) { dragRef.current = { active:true, startX:px, startY:py, baseX:bgXform[activeBg].offX, baseY:bgXform[activeBg].offY }; return; }
       return;
     }
-    if (inPlot(px,py)) { const d=pixelToData(px,py); setSeries((arr)=> arr.map((s,i)=> i===activeSeries? { ...s, points:[...s.points,{x:d.x,y:d.y}] }: s )); }
+    if (inPlot(px,py)) {
+      const d = pixelToData(px,py);
+      setSeries((arr)=> arr.map((s,i)=> i===activeSeries? { ...s, points:[...s.points,{x:d.x,y:d.y}] }: s ));
+    }
   };
-  const onMouseUp = () => { dragRef.current.active = false; resizeRef.current.active = false; };
-  const onMouseLeave = () => { dragRef.current.active = false; resizeRef.current.active = false; };
-  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    const { px, py } = canvasPoint(e); if (!(inPlot(px,py) || overImage(px,py))) return; e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.05 : 0.95; setBgXform((cur)=>{ const n=[...cur] as [BgXf,BgXf]; const xf=n[activeBg]; const ns=clampS(xf.sx*factor); n[activeBg] = { ...xf, sx: ns, sy: keepAspect? ns: clampS(xf.sy*factor) }; return n; });
-  };
-
-  /* ==== Preset / Export ==== */
-  type PresetV1 = { v:1; size: typeof size; pad: typeof pad; axes:{xMin:number;xMax:number;yMin:number;yMax:number;xLog:boolean;yLog:boolean}; series: Series[]; ui:{activeSeries:number}; connect:{connectLines:boolean; lineWidth:number; lineAlpha:number}; bg:{ keepAspect:boolean; anchorMode:AnchorMode; customAnchors:[CustomAnchor,CustomAnchor]; activeBg:0|1; showAB:[boolean,boolean]; opacityAB:[number,number]; xform:[BgXf,BgXf] } };
   const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform } });
   const applyPreset = (p:any) => { try { if(!p) return; p.size&&setSize(p.size); p.pad&&setPad(p.pad); if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); } Array.isArray(p.series)&&setSeries(p.series); p.ui&&setActiveSeries(p.ui.activeSeries??0); if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9);} if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);} } catch(e){ console.warn("preset apply fail", e);} };
   const savePresetFile = async () => {
@@ -372,11 +404,17 @@ export default function App() {
           <div className="grid grid-cols-3 gap-2 text-sm">
             <label className="flex items-center gap-1">Width <input className="w-full rounded border px-2 py-1" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
             <label className="col-span-2 flex items-center gap-2">Alpha <input type="range" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} className="w-full" /> <span>{lineAlpha.toFixed(2)}</span></label>
+            <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> Smooth curve (Catmull‑Rom)</label>
+            <label className="flex items-center gap-2 col-span-3">Point size <input type="range" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} className="w-full" /> <span>{ptRadius}px</span></label>
           </div>
         </section>
 
         <section>
           <h2 className="mb-2 font-semibold">Background A/B</h2>
+          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} /> Magnifier</label>
+            <label className="flex items-center gap-2">Zoom <input type="range" min={2} max={6} step={1} value={magnifyFactor} onChange={(e)=>setMagnifyFactor(Number(e.target.value))} /></label>
+          </div>
           <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-1"><input type="radio" name="activebg" checked={activeBg===0} onChange={()=>setActiveBg(0)} /> Edit A</label>
             <label className="flex items-center gap-1"><input type="radio" name="activebg" checked={activeBg===1} onChange={()=>setActiveBg(1)} /> Edit B</label>
