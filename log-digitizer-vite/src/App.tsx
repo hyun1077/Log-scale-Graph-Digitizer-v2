@@ -341,7 +341,7 @@ export default function App() {
           width={size.w}
           height={size.h}
           className="touch-none select-none"
-          style={{ cursor: pickAnchor || pickBL ? "crosshair" : bgEditMode ? (hoverHandle !== "none" ? "nwse-resize" : "move") : "crosshair" }}
+          style={{ cursor: pickAnchor ? "crosshair" : (bgEditMode ? (hoverHandle !== "none" ? "nwse-resize" : "move") : "crosshair") }}diff
           onMouseMove={onMouseMove}
           onMouseDown={onMouseDown}
           onMouseUp={onMouseUp}
@@ -436,7 +436,7 @@ export default function App() {
             <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="center"} onChange={()=>setAnchorMode("center")} /> Center</label>
             <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="custom"} onChange={()=>setAnchorMode("custom")} /> Custom</label>
             <button onClick={()=>{ setPickAnchor(v=>!v); }} className={`rounded-lg px-2 py-1 ${pickAnchor?"bg-amber-100 border border-amber-300":"border"}`}>Pick Anchor</button>
-            <button onClick={()=>{ setCustomAnchors(cur=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return n; }); if(anchorMode==="custom") setAnchorMode("bottom-left"); }} className="rounded-lg border px-2 py-1">Clear Anchor</button>
+            <button onClick={()=>{ setCustomAnchors(cur=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return n; }); setAnchorMode("center"); }} className="rounded-lg border px-2 py-1">Clear Anchor</button>
           </div>
           {loadError[activeBg] && <p className="mt-2 text-sm text-red-600">{loadError[activeBg]}</p>}
         </section>
