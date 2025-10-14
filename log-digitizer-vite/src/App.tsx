@@ -26,6 +26,7 @@ export default function App() {
   const lastRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const hoverRef = useRef<{ x: number | null; y: number | null }>({ x: null, y: null });
 
+  const [tick, setTick] = useState(0);
   const [size, setSize] = useState({ w: 960, h: 560 });
   const [pad, setPad] = useState({ left: 60, right: 20, top: 30, bottom: 46 });
 
@@ -244,8 +245,17 @@ export default function App() {
       console.error("draw error", err); setToast({ msg: "Render error. Axes reset.", kind: "err" });
       setXMin(10); setXMax(1_000_000); setYMin(0.0001); setYMax(1_000_000);
     }
-  }, [size,pad,xMin,xMax,yMin,yMax,xLog,yLog,series,bgList,showAB,opacityAB,activeBg,keepAspect,bgXform,anchorMode,customAnchors,hoverHandle,connectLines,lineWidth,lineAlpha]);
-
+      }, [
+       size, pad,
+       xMin, xMax, yMin, yMax, xLog, yLog,
+       series,
+       bgList, showAB, opacityAB, activeBg, keepAspect, bgXform,
+       anchorMode, customAnchors, hoverHandle,
+       connectLines, lineWidth, lineAlpha,
+       ptRadius, showPoints,   // 점 크기/표시 토글 쓰고 있으면 포함
+       tick                     // ← 이게 마우스 이동 시 리드로우 트리거
+     ]);
+  
   function drawCross(ctx: CanvasRenderingContext2D, x: number, y: number, r = 5) { ctx.save(); ctx.strokeStyle = "#2563EB"; ctx.beginPath(); ctx.moveTo(x-r,y); ctx.lineTo(x+r,y); ctx.moveTo(x,y-r); ctx.lineTo(x,y+r); ctx.stroke(); ctx.restore(); }
   function catmullRomPath(ctx: CanvasRenderingContext2D, pts: {px:number;py:number}[], alpha=0.5){
     if(pts.length<2){ const p=pts[0]; ctx.moveTo(p.px,p.py); return; }
@@ -304,6 +314,8 @@ export default function App() {
       return;
     }
     setHoverHandle(bgEditMode ? pickHandle(px,py) : "none");
+    setTick(t => (t + 1) & 0xffff);
+
   };
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e);
@@ -339,6 +351,7 @@ const onMouseLeave = (_e: React.MouseEvent<HTMLCanvasElement>) => {
   setHoverHandle("none");
   dragRef.current.active = false;
   resizeRef.current.active = false;
+  setTick(t => (t + 1) & 0xffff);
 };
 
 const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -353,6 +366,8 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     n[activeBg] = { ...xf, sx: nsx, sy: keepAspect ? nsx : nsy };
     return n;
   });
+  setTick(t => (t + 1) & 0xffff);
+
 };
 
   const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform }, images: bgUrls.current });
