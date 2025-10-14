@@ -43,7 +43,7 @@ export default function App() {
   const [lineWidth, setLineWidth] = useState(1.6);
   const [lineAlpha, setLineAlpha] = useState(0.9);
   const [smoothLines, setSmoothLines] = useState(true);
-  const [ptRadius, setPtRadius] = useState(5);
+  const [showPoints, setShowPoints] = useState(true);
   const [magnifyOn, setMagnifyOn] = useState(false);
   const [magnifyFactor, setMagnifyFactor] = useState(3);
 
@@ -187,11 +187,11 @@ export default function App() {
         const rr = innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x, rr.y, rr.w, rr.h); ctx.clip();
         ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
         for (const s of series) {
-          if (s.points.length < 2) continue; const pts = [...s.points].sort((a,b)=> a.x===b.x? a.y-b.y : a.x-b.x);
+          if (s.points.length < 2) continue; const pts = [...s.points]; // 클릭한 순서 유지
           const pxPts = pts.map(p=> dataToPixel(p.x,p.y));
           ctx.strokeStyle = s.color; ctx.beginPath();
           if (smoothLines && pxPts.length>=2) {
-            catmullRomPath(ctx, pxPts, 0.5);
+            catmullRomPath(ctx, pxPts, 0.35);
           } else {
             ctx.moveTo(pxPts[0].px, pxPts[0].py);
             for (let i=1;i<pxPts.length;i++){ ctx.lineTo(pxPts[i].px, pxPts[i].py); }
@@ -201,8 +201,11 @@ export default function App() {
         ctx.globalAlpha = 1; ctx.restore();
       }
 
-      for (const s of series) { ctx.fillStyle = s.color; ctx.strokeStyle = "#fff"; for (const p of s.points) { const P = dataToPixel(p.x, p.y); ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI*2); ctx.fill(); if(ptRadius>=3){ ctx.lineWidth=1; ctx.stroke(); } } }
-
+      if (showPoints) {for (const s of series) {ctx.fillStyle = s.color; ctx.strokeStyle = "#fff"; for (const p of s.points) {const P = dataToPixel(p.x, p.y);
+      ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI*2); ctx.fill(); if(ptRadius>=3){ ctx.lineWidth=1; ctx.stroke(); }
+         }
+       }
+     }
       if (hoverRef.current.x !== null && hoverRef.current.y !== null) {
         const P = dataToPixel(hoverRef.current.x, hoverRef.current.y), rr = innerRect();
         ctx.save(); ctx.strokeStyle = "#9CA3AF"; ctx.setLineDash([4,3]);
@@ -217,7 +220,7 @@ export default function App() {
       // Magnifier (loupe) overlay
       if (magnifyOn && hoverRef.current.x!==null && hoverRef.current.y!==null){
         const hp = dataToPixel(hoverRef.current.x!, hoverRef.current.y!);
-        const sz=90, f=magnifyFactor; const sx=Math.max(0, Math.min(size.w-sz/f, hp.px - sz/(2*f))), sy=Math.max(0, Math.min(size.h-sz/f, hp.py - sz/(2*f)));
+        const sz=120, f=magnifyFactor; const sx=Math.max(0, Math.min(size.w-sz/f, hp.px - sz/(2*f))), sy=Math.max(0, Math.min(size.h-sz/f, hp.py - sz/(2*f)));
         ctx.save(); ctx.imageSmoothingEnabled = false;
         ctx.drawImage(c, sx, sy, sz/f, sz/f, size.w - sz - 16, 16, sz, sz);
         ctx.strokeStyle="#111827"; ctx.lineWidth=2; ctx.strokeRect(size.w - sz - 16, 16, sz, sz);
@@ -399,7 +402,7 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
           <span className="mx-1 h-5 w-px bg-gray-200" />
           <button onClick={savePresetFile} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Save preset (JSON)</button>
           <button onClick={()=> presetFileRef.current?.click()} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Load preset (file)</button>
-          <input ref={presetFileRef} type="file" accept="application/json" className="hidden" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) loadPresetFromFile(f); (e.target as any).value=""; }} />
+          <input ref={presetFileRef} type="file" accept="application/json" style={{display:"none"}} aria-hidden="true" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) loadPresetFromFile(f); (e.target as any).value=""; }} />
           <button onClick={savePresetLocal} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Save to Local</button>
           <button onClick={loadPresetLocal} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Load from Local</button>
           <button onClick={copyShareURL} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Copy URL</button>
@@ -434,6 +437,7 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
             <label className="flex items-center gap-1">Width <input className="w-full rounded border px-2 py-1" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
             <label className="col-span-2 flex items-center gap-2">Alpha <input type="range" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} className="w-full" /> <span>{lineAlpha.toFixed(2)}</span></label>
             <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> Smooth curve (Catmull‑Rom)</label>
+            <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={showPoints} onChange={(e)=>setShowPoints(e.target.checked)} /> Show points</label>
             <label className="flex items-center gap-2 col-span-3">Point size <input type="range" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} className="w-full" /> <span>{ptRadius}px</span></label>
           </div>
         </section>
@@ -442,7 +446,7 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
           <h2 className="mb-2 font-semibold">Background A/B</h2>
           <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-2"><input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} /> Magnifier</label>
-            <label className="flex items-center gap-2">Zoom <input type="range" min={2} max={6} step={1} value={magnifyFactor} onChange={(e)=>setMagnifyFactor(Number(e.target.value))} /></label>
+            <label className="flex items-center gap-2">Zoom <input type="range" min={2} max={8} step={1} value={magnifyFactor} onChange={(e)=>setMagnifyFactor(Number(e.target.value))} /></label>
           </div>
           <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-1"><input type="radio" name="activebg" checked={activeBg===0} onChange={()=>setActiveBg(0)} /> Edit A</label>
@@ -456,8 +460,10 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
           <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
             <button onClick={()=> fileARef.current?.click()} className="rounded-lg border px-2 py-1">Load A</button>
             <button onClick={()=> fileBRef.current?.click()} className="rounded-lg border px-2 py-1">Load B</button>
-            <input ref={fileARef} type="file" accept="image/*" className="hidden" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
-            <input ref={fileBRef} type="file" accept="image/*" className="hidden" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
+            <input ref={fileARef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
+            onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
+             <input ref={fileBRef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
+             onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
             <span className="mx-1 h-4 w-px bg-gray-200" />
             <button onClick={()=> setBgEditMode(v=>!v)} className={`rounded-lg px-2 py-1 ${bgEditMode?"bg-amber-100 border border-amber-300":"border"}`}>{bgEditMode?"BG Edit ON":"BG Edit OFF"}</button>
             <label className="flex items-center gap-1"><input type="checkbox" checked={keepAspect} onChange={(e)=>setKeepAspect(e.target.checked)} /> Keep ratio</label>
