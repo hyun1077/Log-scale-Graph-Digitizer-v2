@@ -310,6 +310,36 @@ export default function App() {
       setSeries((arr)=> arr.map((s,i)=> i===activeSeries? { ...s, points:[...s.points,{x:d.x,y:d.y}] }: s ));
     }
   };
+
+  // onMouseDown 바로 아래에 추가
+const onMouseUp = (_e: React.MouseEvent<HTMLCanvasElement>) => {
+  if (dragRef.current.active || resizeRef.current.active) {
+    dragRef.current.active = false;
+    resizeRef.current.active = false;
+  }
+};
+
+const onMouseLeave = (_e: React.MouseEvent<HTMLCanvasElement>) => {
+  hoverRef.current = { x: null, y: null };
+  setHoverHandle("none");
+  dragRef.current.active = false;
+  resizeRef.current.active = false;
+};
+
+const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+  if (!bgEditMode) return;           // 점찍기 모드에선 무시
+  e.preventDefault();
+  const k = e.deltaY < 0 ? 1.05 : 0.95; // 위=확대, 아래=축소
+  setBgXform((cur) => {
+    const n = [...cur] as [BgXf, BgXf];
+    const xf = n[activeBg];
+    const nsx = clampS(xf.sx * k);
+    const nsy = clampS(xf.sy * (keepAspect ? k : k));
+    n[activeBg] = { ...xf, sx: nsx, sy: keepAspect ? nsx : nsy };
+    return n;
+  });
+};
+
   const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform }, images: bgUrls.current });
   const applyPreset = (p:any) => { try { if(!p) return; p.size&&setSize(p.size); p.pad&&setPad(p.pad); if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); } Array.isArray(p.series)&&setSeries(p.series); p.ui&&setActiveSeries(p.ui.activeSeries??0); if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9);} if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);} if(Array.isArray(p.images)){ p.images.forEach((src:string|null,idx:number)=>{ if(!src) return; const i = new Image(); i.crossOrigin = "anonymous"; i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); }; i.src = src; }); } } catch(e){ console.warn("preset apply fail", e);} };
   const savePresetFile = async () => {
