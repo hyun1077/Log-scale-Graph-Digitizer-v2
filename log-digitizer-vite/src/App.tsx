@@ -12,7 +12,7 @@ type Pt = { x: number; y: number };
 type Series = { name: string; color: string; points: Pt[] };
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
-type AnchorMode = "center" | "bottom-left" | "custom";
+type AnchorMode = "center" | "custom";
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
 
 export default function App() {
@@ -39,11 +39,11 @@ export default function App() {
     { name: "B", color: "#10B981", points: [] },
   ]);
   const [activeSeries, setActiveSeries] = useState(0);
-  const [connectLines, setConnectLines] = useState(false);
+  const [connectLines, setConnectLines] = useState(true);
   const [lineWidth, setLineWidth] = useState(1.6);
   const [lineAlpha, setLineAlpha] = useState(0.9);
-  const [smoothLines, setSmoothLines] = useState(false);
-  const [ptRadius, setPtRadius] = useState(4);
+  const [smoothLines, setSmoothLines] = useState(true);
+  const [ptRadius, setPtRadius] = useState(5);
   const [magnifyOn, setMagnifyOn] = useState(false);
   const [magnifyFactor, setMagnifyFactor] = useState(3);
 
@@ -57,10 +57,9 @@ export default function App() {
   const [opacityAB, setOpacityAB] = useState<[number, number]>([1, 0.6]);
   const [activeBg, setActiveBg] = useState<0 | 1>(0);
 
-  const [anchorMode, setAnchorMode] = useState<AnchorMode>("bottom-left");
+  const [anchorMode, setAnchorMode] = useState<AnchorMode>("center");
   const [customAnchors, setCustomAnchors] = useState<[CustomAnchor, CustomAnchor]>([null, null]);
   const [pickAnchor, setPickAnchor] = useState(false);
-  const [pickBL, setPickBL] = useState(false);
 
   const [bgEditMode, setBgEditMode] = useState(true);
   const [hoverHandle, setHoverHandle] = useState<Handle>("none");
@@ -105,7 +104,7 @@ export default function App() {
     const base = baseRect(idx), xf = bgXform[idx], CA = customAnchors[idx];
     const dw = base.w * clampS(xf.sx), dh = base.h * clampS(xf.sy);
     let ax = base.x + base.w / 2 + xf.offX, ay = base.y + base.h / 2 + xf.offY, fx = 0.5, fy = 0.5;
-    if (anchorMode === "bottom-left") ax = base.x + xf.offX, ay = base.y + base.h + xf.offY, (fx = 0), (fy = 1);
+    
     if (anchorMode === "custom" && CA) ax = CA.ax, ay = CA.ay, (fx = CA.fx), (fy = CA.fy);
     const dx = ax - fx * dw, dy = ay - fy * dh;
     return { dx, dy, dw, dh, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
@@ -144,8 +143,8 @@ export default function App() {
   }, [activeBg]);
 
   /* ==== Key / Mode ==== */
-  useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPickAnchor(false); setPickBL(false); } }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, []);
-  useEffect(() => { if (!bgEditMode) { dragRef.current.active = false; resizeRef.current.active = false; setHoverHandle("none"); setPickAnchor(false); setPickBL(false); } }, [bgEditMode]);
+  useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPickAnchor(false); } }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, []);
+  useEffect(() => { if (!bgEditMode) { dragRef.current.active = false; resizeRef.current.active = false; setHoverHandle("none"); setPickAnchor(false); } }, [bgEditMode]);
 
   /* ==== Canvas Render ==== */
   useEffect(() => {
@@ -163,7 +162,7 @@ export default function App() {
         const { dx, dy, dw, dh, ax, ay } = drawRectAndAnchor(i);
         ctx.globalAlpha = opacityAB[i]; ctx.drawImage(img as any, dx, dy, dw, dh); ctx.globalAlpha = 1;
         if (i === activeBg) lastRectRef.current = { x: dx, y: dy, w: dw, h: dh };
-        if (i === activeBg && (pickAnchor || pickBL)) {
+        if (i === activeBg && pickAnchor) {
           ctx.save(); ctx.strokeStyle = "#F59E0B"; ctx.fillStyle = "#F59E0B";
           ctx.beginPath(); ctx.arc(ax, ay, 6, 0, Math.PI * 2); ctx.globalAlpha = 0.15; ctx.fill(); ctx.globalAlpha = 1;
           ctx.beginPath(); ctx.moveTo(ax - 8, ay); ctx.lineTo(ax + 8, ay); ctx.moveTo(ax, ay - 8); ctx.lineTo(ax, ay + 8); ctx.stroke(); ctx.restore();
@@ -274,7 +273,7 @@ export default function App() {
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e); const rr = innerRect();
     hoverRef.current = px>=rr.x && px<=rr.x+rr.w && py>=rr.y && py<=rr.y+rr.h ? pixelToData(px,py) : { x:null, y:null };
-    if (pickAnchor || pickBL) { setHoverHandle("none"); return; }
+    if (pickAnchor) { setHoverHandle("none"); return; }
     if (resizeRef.current.active && bgEditMode) {
       const { fx, fy, ax, ay, baseW, baseH, mode } = resizeRef.current;
       let { dw, dh } = drawRectAndAnchor(activeBg); const safe=(v:number)=> Math.abs(v)<1e-6? 1e-6: v;
@@ -293,13 +292,13 @@ export default function App() {
   };
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e);
-    if (e.button === 2) { setPickAnchor(false); setPickBL(false); return; }
+    if (e.button === 2) { setPickAnchor(false); return; }
     if (pickAnchor && overImage(px,py)) {
       const lr=lastRectRef.current; if(!lr) return; const fx=(px-lr.x)/lr.w, fy=(py-lr.y)/lr.h;
       setCustomAnchors((cur)=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]={ ax:px, ay:py, fx:Math.max(0,Math.min(1,fx)), fy:Math.max(0,Math.min(1,fy)) }; return n; });
       setAnchorMode("custom"); setPickAnchor(false); return;
     }
-    if (pickBL && overImage(px,py)) { setCustomAnchors((cur)=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg] = { ax:px, ay:py, fx:0, fy:1 }; return n; }); setAnchorMode("custom"); setPickBL(false); return; }
+    
     if (bgEditMode) {
       const h = pickHandle(px,py);
       if (h !== "none") { const d = drawRectAndAnchor(activeBg); resizeRef.current = { active:true, mode:h, ax:d.ax, ay:d.ay, fx:d.fx, fy:d.fy, baseW:d.baseW, baseH:d.baseH }; return; }
@@ -311,8 +310,8 @@ export default function App() {
       setSeries((arr)=> arr.map((s,i)=> i===activeSeries? { ...s, points:[...s.points,{x:d.x,y:d.y}] }: s ));
     }
   };
-  const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform } });
-  const applyPreset = (p:any) => { try { if(!p) return; p.size&&setSize(p.size); p.pad&&setPad(p.pad); if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); } Array.isArray(p.series)&&setSeries(p.series); p.ui&&setActiveSeries(p.ui.activeSeries??0); if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9);} if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);} } catch(e){ console.warn("preset apply fail", e);} };
+  const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform }, images: bgUrls.current });
+  const applyPreset = (p:any) => { try { if(!p) return; p.size&&setSize(p.size); p.pad&&setPad(p.pad); if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); } Array.isArray(p.series)&&setSeries(p.series); p.ui&&setActiveSeries(p.ui.activeSeries??0); if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9);} if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);} if(Array.isArray(p.images)){ p.images.forEach((src:string|null,idx:number)=>{ if(!src) return; const i = new Image(); i.crossOrigin = "anonymous"; i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); }; i.src = src; }); } } catch(e){ console.warn("preset apply fail", e);} };
   const savePresetFile = async () => {
     const data = JSON.stringify(serialize(), null, 2);
     try { if (typeof (window as any).showSaveFilePicker === "function") { const handle = await (window as any).showSaveFilePicker({ suggestedName:`digitizer_preset_${Date.now()}.json`, types:[{description:"JSON", accept:{"application/json":[".json"]}}] }); const w = await handle.createWritable(); await w.write(new Blob([data],{type:"application/json"})); await w.close(); notify("Preset saved as file."); return; } } catch(err){ console.warn("picker fail; fallback", err); }
@@ -350,7 +349,7 @@ export default function App() {
           onWheel={onWheel}
           onDragOver={(e)=>e.preventDefault()}
           onDrop={(e)=>{ e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg); }}
-          onContextMenu={(e)=>{ e.preventDefault(); if(pickAnchor) setPickAnchor(false); if(pickBL) setPickBL(false); }}
+          onContextMenu={(e)=>{ e.preventDefault(); if(pickAnchor) setPickAnchor(false); }}
         />
       </div>
 
@@ -399,7 +398,7 @@ export default function App() {
           <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===0} onChange={()=>setActiveSeries(0)} /> Series A</label>
             <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===1} onChange={()=>setActiveSeries(1)} /> Series B</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect</label>
+            <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect (default on)</label>
           </div>
           <div className="grid grid-cols-3 gap-2 text-sm">
             <label className="flex items-center gap-1">Width <input className="w-full rounded border px-2 py-1" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
@@ -435,10 +434,8 @@ export default function App() {
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="center"} onChange={()=>setAnchorMode("center")} /> Center</label>
-            <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="bottom-left"} onChange={()=>setAnchorMode("bottom-left")} /> Bottom‑Left</label>
             <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="custom"} onChange={()=>setAnchorMode("custom")} /> Custom</label>
-            <button onClick={()=>{ setPickAnchor(v=>!v); setPickBL(false); }} className={`rounded-lg px-2 py-1 ${pickAnchor?"bg-amber-100 border border-amber-300":"border"}`}>Pick Anchor</button>
-            <button onClick={()=>{ setPickBL(v=>!v); setPickAnchor(false); }} className={`rounded-lg px-2 py-1 ${pickBL?"bg-amber-100 border border-amber-300":"border"}`}>Pick Bottom‑Left</button>
+            <button onClick={()=>{ setPickAnchor(v=>!v); }} className={`rounded-lg px-2 py-1 ${pickAnchor?"bg-amber-100 border border-amber-300":"border"}`}>Pick Anchor</button>
             <button onClick={()=>{ setCustomAnchors(cur=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return n; }); if(anchorMode==="custom") setAnchorMode("bottom-left"); }} className="rounded-lg border px-2 py-1">Clear Anchor</button>
           </div>
           {loadError[activeBg] && <p className="mt-2 text-sm text-red-600">{loadError[activeBg]}</p>}
