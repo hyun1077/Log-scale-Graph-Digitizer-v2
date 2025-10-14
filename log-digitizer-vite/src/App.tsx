@@ -250,11 +250,13 @@ export default function App() {
        xMin, xMax, yMin, yMax, xLog, yLog,
        series,
        bgList, showAB, opacityAB, activeBg, keepAspect, bgXform,
-       anchorMode, customAnchors, hoverHandle,
+       anchorMode, customAnchors, hoverHandle, pickAnchor,
        connectLines, lineWidth, lineAlpha,
-       ptRadius, showPoints,   // 점 크기/표시 토글 쓰고 있으면 포함
-       tick                     // ← 이게 마우스 이동 시 리드로우 트리거
-     ]);
+       ptRadius, showPoints,
+       magnifyOn, magnifyFactor,   // ← 확대 토글/슬라이더 바뀌면 즉시 리드로우
+       activeSeries,               // ← 레전드 화살표(활성 시리즈) 반영
+       tick
+      ]);
   
   function drawCross(ctx: CanvasRenderingContext2D, x: number, y: number, r = 5) { ctx.save(); ctx.strokeStyle = "#2563EB"; ctx.beginPath(); ctx.moveTo(x-r,y); ctx.lineTo(x+r,y); ctx.moveTo(x,y-r); ctx.lineTo(x,y+r); ctx.stroke(); ctx.restore(); }
   function catmullRomPath(ctx: CanvasRenderingContext2D, pts: {px:number;py:number}[], alpha=0.5){
@@ -344,6 +346,7 @@ const onMouseUp = (_e: React.MouseEvent<HTMLCanvasElement>) => {
     dragRef.current.active = false;
     resizeRef.current.active = false;
   }
+  setTick(t => (t + 1) & 0xffff);
 };
 
 const onMouseLeave = (_e: React.MouseEvent<HTMLCanvasElement>) => {
