@@ -43,6 +43,7 @@ export default function App() {
   const [lineWidth, setLineWidth] = useState(1.6);
   const [lineAlpha, setLineAlpha] = useState(0.9);
   const [smoothLines, setSmoothLines] = useState(true);
+  const [ptRadius, setPtRadius] = useState(5);
   const [showPoints, setShowPoints] = useState(true);
   const [magnifyOn, setMagnifyOn] = useState(false);
   const [magnifyFactor, setMagnifyFactor] = useState(3);
@@ -201,11 +202,22 @@ export default function App() {
         ctx.globalAlpha = 1; ctx.restore();
       }
 
-      if (showPoints) {for (const s of series) {ctx.fillStyle = s.color; ctx.strokeStyle = "#fff"; for (const p of s.points) {const P = dataToPixel(p.x, p.y);
-      ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI*2); ctx.fill(); if(ptRadius>=3){ ctx.lineWidth=1; ctx.stroke(); }
+      if (showPoints) {
+         for (const s of series) {
+           ctx.fillStyle = s.color;
+           ctx.strokeStyle = "#fff";
+           for (const p of s.points) {
+             const P = dataToPixel(p.x, p.y);
+             ctx.beginPath();
+             ctx.arc(P.px, P.py, ptRadius, 0, Math.PI * 2);
+             ctx.fill();
+             if (ptRadius >= 3) {
+               ctx.lineWidth = 1;
+               ctx.stroke();
+             }
+           }
          }
        }
-     }
       if (hoverRef.current.x !== null && hoverRef.current.y !== null) {
         const P = dataToPixel(hoverRef.current.x, hoverRef.current.y), rr = innerRect();
         ctx.save(); ctx.strokeStyle = "#9CA3AF"; ctx.setLineDash([4,3]);
@@ -374,7 +386,7 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
           width={size.w}
           height={size.h}
           className="touch-none select-none"
-          style={{ cursor: pickAnchor ? "crosshair" : (bgEditMode ? (hoverHandle !== "none" ? "nwse-resize" : "move") : "crosshair") }}diff
+          style={{ cursor: pickAnchor ? "crosshair" : (bgEditMode ? (hoverHandle !== "none" ? "nwse-resize" : "move") : "crosshair") }}
           onMouseMove={onMouseMove}
           onMouseDown={onMouseDown}
           onMouseUp={onMouseUp}
