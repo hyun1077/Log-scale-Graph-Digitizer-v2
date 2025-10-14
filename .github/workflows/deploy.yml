@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: "pages"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -25,23 +25,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+          cache-dependency-path: log-digitizer-vite/package.json
 
-      # 👇 하위 폴더에서 설치/빌드 (핵심)
-      - name: Install deps
-        working-directory: ./log-digitizer-vite
-        run: npm ci || npm i
-
-      - name: Build
-        working-directory: ./log-digitizer-vite
-        run: npm run build
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Install & Build (Vite)
+        working-directory: log-digitizer-vite
+        run: |
+          npm ci
+          npm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./log-digitizer-vite/dist
+          path: log-digitizer-vite/dist
 
   deploy:
     needs: build
