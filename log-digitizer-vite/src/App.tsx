@@ -1,19 +1,21 @@
-// @ts-nocheck
+/* @ts-nocheck */
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Log‑scale Graph Digitizer — single file (< 650 lines)
- * 핵심: A/B 배경 이미지(업로드·붙여넣기·DnD), 투명도/표시, BG 편집 토글(이동·리사이즈·휠줌),
- * 앵커(중앙/좌하/커스텀 픽), 축 log/linear+범위, 클릭으로 점 찍기, 선 연결, CSV/PNG, 프리셋(파일/Local/URL)
+ * Log-scale Graph Digitizer — single file
+ * - BG A/B 이미지 업로드/붙여넣기/드래그, 투명도/표시, 편집(이동/리사이즈/휠줌)
+ * - 앵커(커스텀 좌하 기준), 축 log/linear+범위, 클릭 점찍기, 선 연결/스무스, CSV/PNG
+ * - 프리셋(파일/URL) — 수동 Local 저장/불러오기 버튼 제거(자동 저장은 유지)
+ * - 가이드 X(예: 1000A) 추가 → 세로선 + 각 시리즈 교점 마킹/라벨 + 입력 옆 실시간 결과
  */
 
-/* ==== Types ==== */
 type Pt = { x: number; y: number };
 type Series = { name: string; color: string; points: Pt[] };
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type AnchorMode = "center" | "custom";
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
+type PresetV1 = any;
 
 export default function App() {
   /* ==== Refs / State ==== */
@@ -44,6 +46,7 @@ export default function App() {
   const [lineWidth, setLineWidth] = useState(1.6);
   const [lineAlpha, setLineAlpha] = useState(0.9);
   const [smoothLines, setSmoothLines] = useState(true);
+  const [smoothAlpha, setSmoothAlpha] = useState(0.35); // 0=가장 부드럽, 1=직선에 가까움
   const [ptRadius, setPtRadius] = useState(5);
   const [showPoints, setShowPoints] = useState(true);
   const [magnifyOn, setMagnifyOn] = useState(false);
@@ -59,7 +62,8 @@ export default function App() {
   const [opacityAB, setOpacityAB] = useState<[number, number]>([1, 0.6]);
   const [activeBg, setActiveBg] = useState<0 | 1>(0);
 
-  const [anchorMode, setAnchorMode] = useState<AnchorMode>("center");
+  // 기본 custom + 좌하(왼쪽-하단) 기준으로 변경
+  const [anchorMode, setAnchorMode] = useState<AnchorMode>("custom");
   const [customAnchors, setCustomAnchors] = useState<[CustomAnchor, CustomAnchor]>([null, null]);
   const [pickAnchor, setPickAnchor] = useState(false);
 
@@ -76,6 +80,11 @@ export default function App() {
     window.clearTimeout((notify as any)._t);
     (notify as any)._t = window.setTimeout(() => setToast(null), 1600);
   };
+
+  // Guides: X 값 관리 + 입력 옆 실시간 표시
+  const [guideXs, setGuideXs] = useState<number[]>([]);
+  const [guideInput, setGuideInput] = useState<string>("");
+  const [inlineX, setInlineX] = useState<number | null>(null);
 
   /* ==== Math / Util ==== */
   const innerRect = () => ({ x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom });
@@ -104,12 +113,19 @@ export default function App() {
   };
   const drawRectAndAnchor = (idx: 0 | 1) => {
     const base = baseRect(idx), xf = bgXform[idx], CA = customAnchors[idx];
-    const dw = base.w * clampS(xf.sx), dh = base.h * clampS(xf.sy);
+    const dw0 = base.w * clampS(xf.sx), dh0 = base.h * clampS(xf.sy);
     let ax = base.x + base.w / 2 + xf.offX, ay = base.y + base.h / 2 + xf.offY, fx = 0.5, fy = 0.5;
-    
-    if (anchorMode === "custom" && CA) ax = CA.ax, ay = CA.ay, (fx = CA.fx), (fy = CA.fy);
-    const dx = ax - fx * dw, dy = ay - fy * dh;
-    return { dx, dy, dw, dh, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
+
+    // 기본 custom + 좌하(왼쪽-하단) 기준
+    if (anchorMode === "custom") {
+      if (CA) {
+        ax = CA.ax; ay = CA.ay; fx = CA.fx; fy = CA.fy;
+      } else {
+        ax = base.x; ay = base.y + base.h; fx = 0; fy = 1;
+      }
+    }
+    const dx = ax - fx * dw0, dy = ay - fy * dh0;
+    return { dx, dy, dw: dw0, dh: dh0, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
   };
 
   /* ==== Image Load ==== */
@@ -148,6 +164,37 @@ export default function App() {
   useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPickAnchor(false); } }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, []);
   useEffect(() => { if (!bgEditMode) { dragRef.current.active = false; resizeRef.current.active = false; setHoverHandle("none"); setPickAnchor(false); } }, [bgEditMode]);
 
+  /* ==== Guide 계산: y(x) 보간 ==== */
+  function yAtX(seriesPts: Pt[], xTarget: number): number | null {
+    if (!seriesPts || seriesPts.length < 2) return null;
+    const tx = (x: number) => tVal(x, xLog);
+    const ty = (y: number) => tVal(y, yLog);
+    const invY = (tv: number) => (yLog ? Math.pow(10, tv) : tv);
+    const xT = tx(xTarget);
+    for (let i = 0; i < seriesPts.length - 1; i++) {
+      const p1 = seriesPts[i], p2 = seriesPts[i + 1];
+      const x1 = tx(p1.x), x2 = tx(p2.x);
+      if ((x1 <= xT && xT <= x2) || (x2 <= xT && xT <= x1)) {
+        const t = (xT - x1) / (x2 - x1 || EPS);
+        const y1 = ty(p1.y), y2 = ty(p2.y);
+        const yT = y1 + t * (y2 - y1);
+        return invY(yT);
+      }
+    }
+    return null;
+  }
+  function inlineLabelForX(x: number): string {
+    if (!isFinite(x) || x <= 0) return "";
+    const parts: string[] = [];
+    for (const s of series) {
+      const y = yAtX(s.points, x);
+      if (y === null || !isFinite(y)) continue;
+      const yTxt = yLog ? y.toExponential(3) : y.toPrecision(6);
+      parts.push(`${s.name}: y=${yTxt}`);
+    }
+    return parts.length ? parts.join("  |  ") : "(교점 없음)";
+  }
+
   /* ==== Canvas Render ==== */
   useEffect(() => {
     try {
@@ -185,15 +232,50 @@ export default function App() {
 
       drawGrid(ctx);
 
+      // === Guide vertical lines & intersections ===
+      if (guideXs.length) {
+        const rr = innerRect();
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "#EF4444"; // red
+        ctx.fillStyle = "#EF4444";
+        for (const gx of guideXs) {
+          const gp = dataToPixel(gx, 1);
+          ctx.beginPath();
+          ctx.moveTo(gp.px, rr.y);
+          ctx.lineTo(gp.px, rr.y + rr.h);
+          ctx.stroke();
+          series.forEach((s) => {
+            const y = yAtX(s.points, gx);
+            if (y === null || !isFinite(y)) return;
+            const P = dataToPixel(gx, y);
+            ctx.beginPath();
+            ctx.arc(P.px, P.py, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.save();
+            ctx.font = "11px ui-sans-serif, system-ui";
+            ctx.fillStyle = "#111827";
+            const yTxt = yLog ? y.toExponential(3) : y.toPrecision(6);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "bottom";
+            ctx.fillText(`${s.name}: y=${yTxt}`, P.px + 6, P.py - 2);
+            ctx.restore();
+          });
+        }
+        ctx.restore();
+      }
+
+      // Lines
       if (connectLines) {
         const rr = innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x, rr.y, rr.w, rr.h); ctx.clip();
         ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
         for (const s of series) {
-          if (s.points.length < 2) continue; const pts = [...s.points]; // 클릭한 순서 유지
+          if (s.points.length < 2) continue; const pts = [...s.points];
           const pxPts = pts.map(p=> dataToPixel(p.x,p.y));
           ctx.strokeStyle = s.color; ctx.beginPath();
           if (smoothLines && pxPts.length>=2) {
-            catmullRomPath(ctx, pxPts, 0.35);
+            catmullRomPath(ctx, pxPts, smoothAlpha);
           } else {
             ctx.moveTo(pxPts[0].px, pxPts[0].py);
             for (let i=1;i<pxPts.length;i++){ ctx.lineTo(pxPts[i].px, pxPts[i].py); }
@@ -203,6 +285,7 @@ export default function App() {
         ctx.globalAlpha = 1; ctx.restore();
       }
 
+      // Points
       if (showPoints) {
          for (const s of series) {
            ctx.fillStyle = s.color;
@@ -219,6 +302,8 @@ export default function App() {
            }
          }
        }
+
+      // Hover crosshair
       if (hoverRef.current.x !== null && hoverRef.current.y !== null) {
         const P = dataToPixel(hoverRef.current.x, hoverRef.current.y), rr = innerRect();
         ctx.save(); ctx.strokeStyle = "#9CA3AF"; ctx.setLineDash([4,3]);
@@ -230,7 +315,7 @@ export default function App() {
       ctx.fillStyle = "#111827"; ctx.font = "14px ui-sans-serif, system-ui"; ctx.textAlign = "center"; ctx.fillText(xLog?"X (10^n)":"X", r.x + r.w/2, r.y + r.h + 34);
       ctx.save(); ctx.translate(r.x-45, r.y + r.h/2); ctx.rotate(-Math.PI/2); ctx.fillText(yLog?"Y (10^n)":"Y", 0, 0); ctx.restore();
 
-      // Magnifier (loupe) overlay
+      // Magnifier
       if (magnifyOn && hoverRef.current.x!==null && hoverRef.current.y!==null){
         const hp = dataToPixel(hoverRef.current.x!, hoverRef.current.y!);
         const sz=120, f=magnifyFactor; const sx=Math.max(0, Math.min(size.w-sz/f, hp.px - sz/(2*f))), sy=Math.max(0, Math.min(size.h-sz/f, hp.py - sz/(2*f)));
@@ -240,6 +325,7 @@ export default function App() {
         ctx.beginPath(); ctx.moveTo(size.w - sz - 16 + sz/2, 16); ctx.lineTo(size.w - sz - 16 + sz/2, 16+sz); ctx.moveTo(size.w - sz - 16, 16+sz/2); ctx.lineTo(size.w - 16, 16+sz/2); ctx.stroke(); ctx.restore();
       }
 
+      // Legend
       ctx.save(); ctx.font = "12px ui-sans-serif, system-ui"; let lx = r.x + 8, ly = r.y + 16; series.forEach((s,i)=>{ ctx.fillStyle = s.color; ctx.fillRect(lx, ly-8, 10, 10); ctx.fillStyle = "#111827"; ctx.fillText(`${s.name} (${s.points.length})${i===activeSeries?" <-":""}`, lx+16, ly); ly += 16; }); ctx.restore();
     } catch (err) {
       console.error("draw error", err); setToast({ msg: "Render error. Axes reset.", kind: "err" });
@@ -251,19 +337,16 @@ export default function App() {
        series,
        bgList, showAB, opacityAB, activeBg, keepAspect, bgXform,
        anchorMode, customAnchors, hoverHandle, pickAnchor,
-       connectLines, lineWidth, lineAlpha,
+       connectLines, lineWidth, lineAlpha, smoothLines, smoothAlpha,
        ptRadius, showPoints,
-       magnifyOn, magnifyFactor,   // ← 확대 토글/슬라이더 바뀌면 즉시 리드로우
-       activeSeries,               // ← 레전드 화살표(활성 시리즈) 반영
+       magnifyOn, magnifyFactor,
+       activeSeries, guideXs,
        tick
       ]);
-  
+
   function drawCross(ctx: CanvasRenderingContext2D, x: number, y: number, r = 5) { ctx.save(); ctx.strokeStyle = "#2563EB"; ctx.beginPath(); ctx.moveTo(x-r,y); ctx.lineTo(x+r,y); ctx.moveTo(x,y-r); ctx.lineTo(x,y+r); ctx.stroke(); ctx.restore(); }
   function catmullRomPath(ctx: CanvasRenderingContext2D, pts: {px:number;py:number}[], alpha=0.5){
     if(pts.length<2){ const p=pts[0]; ctx.moveTo(p.px,p.py); return; }
-    const p0={...pts[0]}, p1={...pts[0]};
-    const pEnd={...pts[pts.length-1]}, pBeforeEnd={...pts[pts.length-1]};
-    const P=[p1,...pts.slice(1,-1),pBeforeEnd]; // guard
     ctx.moveTo(pts[0].px, pts[0].py);
     for(let i=0;i<pts.length-1;i++){
       const p0= i===0? pts[0] : pts[i-1];
@@ -279,7 +362,6 @@ export default function App() {
   }
   function numFmt(v:number, step?:number){ if(!isFinite(v)) return ""; const abs=Math.abs(v); if(abs===0) return "0"; const d = step!==undefined? Math.max(0, Math.min(6, -Math.floor(Math.log10(Math.max(1e-12, step))))) : Math.max(0, Math.min(6, 3 - Math.floor(Math.log10(Math.max(1e-12, abs))))); if(abs>=1e5||abs<1e-3) return v.toExponential(2); return v.toFixed(d); }
 
-  // pretty label: 10^n with Unicode superscripts
   const SUPMAP: Record<string,string> = {"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","-":"⁻","+":"⁺",".":"."};
   function supify(exp:number|string){ const s=String(exp); return s.split("").map(ch=> SUPMAP[ch] ?? ch).join(""); }
   function pow10LabelInt(n:number){ return `10${supify(n)}`; }
@@ -317,7 +399,6 @@ export default function App() {
     }
     setHoverHandle(bgEditMode ? pickHandle(px,py) : "none");
     setTick(t => (t + 1) & 0xffff);
-
   };
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e);
@@ -327,7 +408,6 @@ export default function App() {
       setCustomAnchors((cur)=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]={ ax:px, ay:py, fx:Math.max(0,Math.min(1,fx)), fy:Math.max(0,Math.min(1,fy)) }; return n; });
       setAnchorMode("custom"); setPickAnchor(false); return;
     }
-    
     if (bgEditMode) {
       const h = pickHandle(px,py);
       if (h !== "none") { const d = drawRectAndAnchor(activeBg); resizeRef.current = { active:true, mode:h, ax:d.ax, ay:d.ay, fx:d.fx, fy:d.fy, baseW:d.baseW, baseH:d.baseH }; return; }
@@ -339,42 +419,24 @@ export default function App() {
       setSeries((arr)=> arr.map((s,i)=> i===activeSeries? { ...s, points:[...s.points,{x:d.x,y:d.y}] }: s ));
     }
   };
+  const onMouseUp = () => { if (dragRef.current.active || resizeRef.current.active) { dragRef.current.active = false; resizeRef.current.active = false; } setTick(t => (t + 1) & 0xffff); };
+  const onMouseLeave = () => { hoverRef.current = { x: null, y: null }; setHoverHandle("none"); dragRef.current.active = false; resizeRef.current.active = false; setTick(t => (t + 1) & 0xffff); };
+  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (!bgEditMode) return; e.preventDefault();
+    const k = e.deltaY < 0 ? 1.05 : 0.95;
+    setBgXform((cur) => {
+      const n = [...cur] as [BgXf, BgXf];
+      const xf = n[activeBg];
+      const nsx = clampS(xf.sx * k);
+      const nsy = clampS(xf.sy * (keepAspect ? k : k));
+      n[activeBg] = { ...xf, sx: nsx, sy: keepAspect ? nsx : nsy };
+      return n;
+    });
+    setTick(t => (t + 1) & 0xffff);
+  };
 
-  // onMouseDown 바로 아래에 추가
-const onMouseUp = (_e: React.MouseEvent<HTMLCanvasElement>) => {
-  if (dragRef.current.active || resizeRef.current.active) {
-    dragRef.current.active = false;
-    resizeRef.current.active = false;
-  }
-  setTick(t => (t + 1) & 0xffff);
-};
-
-const onMouseLeave = (_e: React.MouseEvent<HTMLCanvasElement>) => {
-  hoverRef.current = { x: null, y: null };
-  setHoverHandle("none");
-  dragRef.current.active = false;
-  resizeRef.current.active = false;
-  setTick(t => (t + 1) & 0xffff);
-};
-
-const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-  if (!bgEditMode) return;           // 점찍기 모드에선 무시
-  e.preventDefault();
-  const k = e.deltaY < 0 ? 1.05 : 0.95; // 위=확대, 아래=축소
-  setBgXform((cur) => {
-    const n = [...cur] as [BgXf, BgXf];
-    const xf = n[activeBg];
-    const nsx = clampS(xf.sx * k);
-    const nsy = clampS(xf.sy * (keepAspect ? k : k));
-    n[activeBg] = { ...xf, sx: nsx, sy: keepAspect ? nsx : nsy };
-    return n;
-  });
-  setTick(t => (t + 1) & 0xffff);
-
-};
-
-  const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform }, images: bgUrls.current });
-  const applyPreset = (p:any) => { try { if(!p) return; p.size&&setSize(p.size); p.pad&&setPad(p.pad); if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); } Array.isArray(p.series)&&setSeries(p.series); p.ui&&setActiveSeries(p.ui.activeSeries??0); if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9);} if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);} if(Array.isArray(p.images)){ p.images.forEach((src:string|null,idx:number)=>{ if(!src) return; const i = new Image(); i.crossOrigin = "anonymous"; i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); }; i.src = src; }); } } catch(e){ console.warn("preset apply fail", e);} };
+  const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha, smoothLines, smoothAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform }, images: bgUrls.current, guides: guideXs });
+  const applyPreset = (p:any) => { try { if(!p) return; p.size&&setSize(p.size); p.pad&&setPad(p.pad); if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); } Array.isArray(p.series)&&setSeries(p.series); p.ui&&setActiveSeries(p.ui.activeSeries??0); if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9); setSmoothLines(!!p.connect.smoothLines); if(typeof p.connect.smoothAlpha==="number") setSmoothAlpha(p.connect.smoothAlpha);} if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);} if(Array.isArray(p.images)){ p.images.forEach((src:string|null,idx:number)=>{ if(!src) return; const i = new Image(); i.crossOrigin = "anonymous"; i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); }; i.src = src; }); } if(Array.isArray(p.guides)) setGuideXs(p.guides.filter((v:any)=> isFinite(v) && v>0)); } catch(e){ console.warn("preset apply fail", e);} };
   const savePresetFile = async () => {
     const data = JSON.stringify(serialize(), null, 2);
     try { if (typeof (window as any).showSaveFilePicker === "function") { const handle = await (window as any).showSaveFilePicker({ suggestedName:`digitizer_preset_${Date.now()}.json`, types:[{description:"JSON", accept:{"application/json":[".json"]}}] }); const w = await handle.createWritable(); await w.write(new Blob([data],{type:"application/json"})); await w.close(); notify("Preset saved as file."); return; } } catch(err){ console.warn("picker fail; fallback", err); }
@@ -382,12 +444,9 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
   };
   const loadPresetFromFile = (file: File | null) => { if(!file) return; const fr = new FileReader(); fr.onload = () => { try { applyPreset(JSON.parse(String(fr.result||"{}"))); notify("Preset loaded."); } catch { notify("Invalid preset", "err"); } }; fr.readAsText(file); };
   const copyShareURL = () => { try { const enc = btoa(unescape(encodeURIComponent(JSON.stringify(serialize())))); const url = `${location.origin}${location.pathname}#s=${enc}`; navigator.clipboard?.writeText(url); notify("Share URL copied!"); } catch { notify("Copy failed", "err"); } };
-  const savePresetLocal = () => { try { localStorage.setItem("digitizer:preset:manual", JSON.stringify(serialize())); notify("Saved to LocalStorage."); } catch { notify("LocalStorage save failed", "err"); } };
-  const loadPresetLocal = () => { try { const raw = localStorage.getItem("digitizer:preset:manual"); if(!raw){ notify("No Local preset", "err"); return;} applyPreset(JSON.parse(raw)); notify("Loaded from LocalStorage."); } catch { notify("LocalStorage load failed", "err"); } };
-  const toCSV = () => { let out = "series,x,y\n"; series.forEach(s=> s.points.forEach(p=> out += `${s.name},${p.x},${p.y}\n`)); const url = URL.createObjectURL(new Blob([out],{type:"text/csv"})); const a=document.createElement("a"); a.href=url; a.download=`points_${Date.now()}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); };
-  const exportPNG = () => { const c = canvasRef.current; if(!c) return; const url=c.toDataURL("image/png"); const a=document.createElement("a"); a.href=url; a.download=`digitizer_${Date.now()}.png`; a.click(); };
 
-  useEffect(()=>{ try { localStorage.setItem("digitizer:auto", JSON.stringify(serialize())); } catch {} }, [size,pad,xMin,xMax,yMin,yMax,xLog,yLog,series,activeSeries,connectLines,lineWidth,lineAlpha,keepAspect,anchorMode,customAnchors,activeBg,showAB,opacityAB,bgXform]);
+  // 자동 저장(수동 Local 버튼은 제거)
+  useEffect(()=>{ try { localStorage.setItem("digitizer:auto", JSON.stringify(serialize())); } catch {} }, [size,pad,xMin,xMax,yMin,yMax,xLog,yLog,series,activeSeries,connectLines,lineWidth,lineAlpha,smoothLines,smoothAlpha,keepAspect,anchorMode,customAnchors,activeBg,showAB,opacityAB,bgXform,guideXs]);
   useEffect(()=>{ const h=location.hash||""; if(h.startsWith("#s=")){ try{ applyPreset(JSON.parse(decodeURIComponent(escape(atob(h.slice(3)))))); return; }catch{} } try{ const raw=localStorage.getItem("digitizer:auto"); if(raw) applyPreset(JSON.parse(raw)); }catch{} }, []);
 
   /* ==== Simple internal tests ==== */
@@ -396,7 +455,7 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
   /* ==== UI ==== */
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white p-6 text-gray-900">
-      <h1 className="mb-3 text-3xl font-semibold tracking-tight">Log‑scale Graph Digitizer</h1>
+      <h1 className="mb-3 text-3xl font-semibold tracking-tight">Log-scale Graph Digitizer</h1>
 
       <div className="inline-block rounded-2xl border border-gray-200 bg-white p-3 shadow-lg">
         <canvas
@@ -404,7 +463,19 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
           width={size.w}
           height={size.h}
           className="touch-none select-none"
-          style={{ cursor: pickAnchor ? "crosshair" : (bgEditMode ? (hoverHandle !== "none" ? "nwse-resize" : "move") : "crosshair") }}
+          style={{
+            cursor: pickAnchor
+              ? "crosshair"
+              : (bgEditMode
+                  ? (hoverHandle === "left" || hoverHandle === "right")
+                      ? "ew-resize"
+                      : (hoverHandle === "top" || hoverHandle === "bottom")
+                        ? "ns-resize"
+                        : (hoverHandle === "uniform")
+                          ? "nwse-resize"
+                          : "move"
+                  : "crosshair")
+          }}
           onMouseMove={onMouseMove}
           onMouseDown={onMouseDown}
           onMouseUp={onMouseUp}
@@ -419,26 +490,77 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-700">
         <div>
           {hoverRef.current.x !== null && hoverRef.current.y !== null ? (
-            <span>Hover: x={xLog ? hoverRef.current.x!.toExponential(3) : hoverRef.current.x!.toPrecision(6)}, y={yLog ? hoverRef.current.y!.toExponential(3) : hoverRef.current.y!.toPrecision(6)}</span>
+            <span>Cursor: x={xLog ? hoverRef.current.x!.toExponential(3) : hoverRef.current.x!.toPrecision(6)}, y={yLog ? hoverRef.current.y!.toExponential(3) : hoverRef.current.y!.toPrecision(6)}</span>
           ) : (
-            <span>Hover: -</span>
+            <span>Cursor: -</span>
           )}
         </div>
+
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:s.points.slice(0,Math.max(0,s.points.length-1)) }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Undo</button>
           <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:[] }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Clear</button>
-          <button onClick={toCSV} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Export CSV</button>
-          <button onClick={exportPNG} className="rounded-xl bg-blue-600 px-3 py-1 text-white hover:bg-blue-700">Export PNG</button>
+          <button onClick={()=>{ let out = "series,x,y\n"; series.forEach(s=> s.points.forEach(p=> out += `${s.name},${p.x},${p.y}\n`)); const url = URL.createObjectURL(new Blob([out],{type:"text/csv"})); const a=document.createElement("a"); a.href=url; a.download=`points_${Date.now()}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Export CSV</button>
+          <button onClick={()=>{ const c = canvasRef.current; if(!c) return; const url=c.toDataURL("image/png"); const a=document.createElement("a"); a.href=url; a.download=`digitizer_${Date.now()}.png`; a.click(); }} className="rounded-xl bg-blue-600 px-3 py-1 text-white hover:bg-blue-700">Export PNG</button>
+
           <span className="mx-1 h-5 w-px bg-gray-200" />
+
           <button onClick={savePresetFile} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Save preset (JSON)</button>
           <button onClick={()=> presetFileRef.current?.click()} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Load preset (file)</button>
           <input ref={presetFileRef} type="file" accept="application/json" style={{display:"none"}} aria-hidden="true" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) loadPresetFromFile(f); (e.target as any).value=""; }} />
-          <button onClick={savePresetLocal} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Save to Local</button>
-          <button onClick={loadPresetLocal} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Load from Local</button>
           <button onClick={copyShareURL} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Copy URL</button>
           <button onClick={()=>{ setXMin(10); setXMax(1_000_000); setYMin(0.0001); setYMax(1_000_000); setXLog(true); setYLog(true); notify("Axes reset"); }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Reset Axes</button>
-          <button onClick={()=>{ try{ localStorage.removeItem("digitizer:auto"); localStorage.removeItem("digitizer:preset:manual"); location.hash=""; notify("Hard reset done"); }catch{} }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Hard Reset</button>
+          <button onClick={()=>{ try{ localStorage.removeItem("digitizer:auto"); location.hash=""; notify("Hard reset done"); }catch{} }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Hard Reset</button>
         </div>
+      </div>
+
+      {/* Guides (inline result) */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">Guide X:</span>
+        <input
+          placeholder="예: 1000"
+          value={guideInput}
+          onChange={(e)=> {
+            setGuideInput(e.target.value);
+            const v = Number(e.target.value);
+            setInlineX(isFinite(v) && v>0 ? v : null);
+          }}
+          onKeyDown={(e)=> {
+            if (e.key === "Enter") {
+              const v = Number(guideInput);
+              if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); }
+            }
+          }}
+          className="rounded border px-2 py-1 w-28"
+        />
+        <button
+          className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
+          onClick={()=>{
+            const v = Number(guideInput);
+            if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); }
+          }}
+        >Add</button>
+        <button
+          className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
+          onClick={()=>{ setGuideXs([]); setInlineX(null); setGuideInput(""); }}
+        >Clear</button>
+
+        <span className="ml-2 text-gray-700">
+          {inlineX !== null
+            ? <>X={<span className="font-mono">{xLog ? inlineX.toExponential(3) : inlineX.toPrecision(6)}</span>} &nbsp;→&nbsp; {inlineLabelForX(inlineX)}</>
+            : <span className="text-gray-400">(값 입력 후 Enter/추가)</span>}
+        </span>
+
+        <button
+          className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
+          onClick={()=>{
+            if (hoverRef.current.x !== null) {
+              const v = hoverRef.current.x!;
+              setGuideXs(g => Array.from(new Set([...g, v])));
+              setInlineX(v);
+              setGuideInput(String(v));
+            }
+          }}
+        >Add from Cursor</button>
       </div>
 
       <div className="mt-4 grid gap-5 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg md:grid-cols-2">
@@ -461,19 +583,37 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
           <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===0} onChange={()=>setActiveSeries(0)} /> Series A</label>
             <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===1} onChange={()=>setActiveSeries(1)} /> Series B</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect (default on)</label>
+            <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect</label>
           </div>
           <div className="grid grid-cols-3 gap-2 text-sm">
+            <label className="col-span-3 flex items-center gap-2">
+              Series A name
+              <input className="w-full rounded border px-2 py-1" value={series[0].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===0? {...s, name:e.target.value}: s))} />
+            </label>
+            <label className="col-span-3 flex items-center gap-2">
+              Series B name
+              <input className="w-full rounded border px-2 py-1" value={series[1].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===1? {...s, name:e.target.value}: s))} />
+            </label>
+
             <label className="flex items-center gap-1">Width <input className="w-full rounded border px-2 py-1" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
             <label className="col-span-2 flex items-center gap-2">Alpha <input type="range" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} className="w-full" /> <span>{lineAlpha.toFixed(2)}</span></label>
-            <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> Smooth curve (Catmull‑Rom)</label>
+
+            <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> Smooth curve (Catmull-Rom)</label>
+            {smoothLines && (
+              <label className="flex items-center gap-2 col-span-3">
+                Smoothness
+                <input type="range" min={0} max={0.9} step={0.05} value={smoothAlpha} onChange={(e)=>setSmoothAlpha(Number(e.target.value))} className="w-full" />
+                <span>{smoothAlpha.toFixed(2)}</span>
+              </label>
+            )}
+
             <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={showPoints} onChange={(e)=>setShowPoints(e.target.checked)} /> Show points</label>
             <label className="flex items-center gap-2 col-span-3">Point size <input type="range" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} className="w-full" /> <span>{ptRadius}px</span></label>
           </div>
         </section>
 
         <section>
-          <h2 className="mb-2 font-semibold">Background A/B</h2>
+          <h2 className="mb-2 font-semibold">Image A/B</h2>
           <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-2"><input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} /> Magnifier</label>
             <label className="flex items-center gap-2">Zoom <input type="range" min={2} max={8} step={1} value={magnifyFactor} onChange={(e)=>setMagnifyFactor(Number(e.target.value))} /></label>
@@ -488,12 +628,12 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
             <label className="flex items-center gap-1">B α <input type="range" min={0} max={1} step={0.05} value={opacityAB[1]} onChange={(e)=> setOpacityAB(([a,b])=>[a, Number(e.target.value)])} /></label>
           </div>
           <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-            <button onClick={()=> fileARef.current?.click()} className="rounded-lg border px-2 py-1">Load A</button>
-            <button onClick={()=> fileBRef.current?.click()} className="rounded-lg border px-2 py-1">Load B</button>
+            <button onClick={()=> fileARef.current?.click()} className="rounded-lg border px-2 py-1">Load Image A</button>
+            <button onClick={()=> fileBRef.current?.click()} className="rounded-lg border px-2 py-1">Load Image B</button>
             <input ref={fileARef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
-            onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
-             <input ref={fileBRef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
-             onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
+              onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
+            <input ref={fileBRef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
+              onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
             <span className="mx-1 h-4 w-px bg-gray-200" />
             <button onClick={()=> setBgEditMode(v=>!v)} className={`rounded-lg px-2 py-1 ${bgEditMode?"bg-amber-100 border border-amber-300":"border"}`}>{bgEditMode?"BG Edit ON":"BG Edit OFF"}</button>
             <label className="flex items-center gap-1"><input type="checkbox" checked={keepAspect} onChange={(e)=>setKeepAspect(e.target.checked)} /> Keep ratio</label>
@@ -502,7 +642,7 @@ const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
             <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="center"} onChange={()=>setAnchorMode("center")} /> Center</label>
             <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="custom"} onChange={()=>setAnchorMode("custom")} /> Custom</label>
             <button onClick={()=>{ setPickAnchor(v=>!v); }} className={`rounded-lg px-2 py-1 ${pickAnchor?"bg-amber-100 border border-amber-300":"border"}`}>Pick Anchor</button>
-            <button onClick={()=>{ setCustomAnchors(cur=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return n; }); setAnchorMode("center"); }} className="rounded-lg border px-2 py-1">Clear Anchor</button>
+            <button onClick={()=>{ setCustomAnchors(cur=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return n; }); setAnchorMode("custom"); }} className="rounded-lg border px-2 py-1">Clear Anchor</button>
           </div>
           {loadError[activeBg] && <p className="mt-2 text-sm text-red-600">{loadError[activeBg]}</p>}
         </section>
