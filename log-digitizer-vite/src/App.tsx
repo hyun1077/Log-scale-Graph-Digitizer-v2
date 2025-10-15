@@ -2,11 +2,15 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Log-scale Graph Digitizer — single file
- * - BG A/B 이미지 업로드/붙여넣기/드래그, 투명도/표시, 편집(이동/리사이즈/휠줌)
- * - 앵커(커스텀 좌하 기준), 축 log/linear+범위, 클릭 점찍기, 선 연결/스무스, CSV/PNG
- * - 프리셋(파일/URL) — 수동 Local 저장/불러오기 버튼 제거(자동 저장은 유지)
- * - 가이드 X(예: 1000A) 추가 → 세로선 + 각 시리즈 교점 마킹/라벨 + 입력 옆 실시간 결과
+ * Log-scale Graph Digitizer — Single file
+ * - 좌측 Image 패널 / 중앙 캔버스 / 우측 Graph 패널 / 하단 Axes 바 레이아웃
+ * - BG 이미지 A/B (업로드/붙여넣기/DnD), 편집(이동/리사이즈/휠줌), 투명도/표시
+ * - 앵커: 기본 custom + 좌하 기준 (Pick Anchor 지원)
+ * - 축 log/linear, 범위, 클릭 점찍기, 선 연결/스무스(강도 조절), 포인트 표시
+ * - 프리셋 파일 저장/불러오기, URL 공유 (수동 Local 저장/불러오기 버튼 제거 — 자동저장 유지)
+ * - Guides: X값 세로 가이드 + 시리즈 교점 마킹/라벨, 입력 옆 실시간 결과
+ * - 커서: 실제값(비로그) 표시 + At X / At Y 교차값 즉시 계산
+ * - 레전드: 좌측 정렬, 큰 글씨, 마커와 겹치지 않게
  */
 
 type Pt = { x: number; y: number };
@@ -164,7 +168,7 @@ export default function App() {
   useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPickAnchor(false); } }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, []);
   useEffect(() => { if (!bgEditMode) { dragRef.current.active = false; resizeRef.current.active = false; setHoverHandle("none"); setPickAnchor(false); } }, [bgEditMode]);
 
-  /* ==== Guide 계산: y(x) 보간 ==== */
+  /* ==== Guide 계산: y(x), x(y) 보간 ==== */
   function yAtX(seriesPts: Pt[], xTarget: number): number | null {
     if (!seriesPts || seriesPts.length < 2) return null;
     const tx = (x: number) => tVal(x, xLog);
@@ -183,14 +187,36 @@ export default function App() {
     }
     return null;
   }
+  function xAtY(seriesPts: Pt[], yTarget: number): number | null {
+    if (!seriesPts || seriesPts.length < 2) return null;
+    const tx = (x: number) => tVal(x, xLog);
+    const ty = (y: number) => tVal(y, yLog);
+    const invX = (tv: number) => (xLog ? Math.pow(10, tv) : tv);
+    const yT = ty(yTarget);
+    for (let i = 0; i < seriesPts.length - 1; i++) {
+      const p1 = seriesPts[i], p2 = seriesPts[i + 1];
+      const y1 = ty(p1.y), y2 = ty(p2.y);
+      if ((y1 <= yT && yT <= y2) || (y2 <= yT && yT <= y1)) {
+        const t = (yT - y1) / (y2 - y1 || EPS);
+        const x1 = tx(p1.x), x2 = tx(p2.x);
+        const xT = x1 + t * (x2 - x1);
+        return invX(xT);
+      }
+    }
+    return null;
+  }
+  function fmtReal(v: number | null): string {
+    if (v === null || !isFinite(v)) return "-";
+    const s = Math.abs(v) >= 1e6 || Math.abs(v) < 1e-4 ? v.toPrecision(6) : v.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    return s.replace(/\.?0+$/,'');
+  }
   function inlineLabelForX(x: number): string {
     if (!isFinite(x) || x <= 0) return "";
     const parts: string[] = [];
     for (const s of series) {
       const y = yAtX(s.points, x);
       if (y === null || !isFinite(y)) continue;
-      const yTxt = yLog ? y.toExponential(3) : y.toPrecision(6);
-      parts.push(`${s.name}: y=${yTxt}`);
+      parts.push(`${s.name}: y=${fmtReal(y)}`);
     }
     return parts.length ? parts.join("  |  ") : "(교점 없음)";
   }
@@ -201,7 +227,7 @@ export default function App() {
       const c = canvasRef.current; if (!c) return; const ctx = c.getContext("2d"); if (!ctx) return;
       const r = innerRect();
       ctx.clearRect(0, 0, size.w, size.h);
-      ctx.fillStyle = "#F9FAFB"; ctx.fillRect(0, 0, size.w, size.h);
+      ctx.fillStyle = "#F8FAFC"; ctx.fillRect(0, 0, size.w, size.h);
       ctx.fillStyle = "#fff"; ctx.fillRect(r.x, r.y, r.w, r.h);
       lastRectRef.current = null;
 
@@ -255,8 +281,8 @@ export default function App() {
             ctx.fill();
             ctx.save();
             ctx.font = "11px ui-sans-serif, system-ui";
-            ctx.fillStyle = "#111827";
-            const yTxt = yLog ? y.toExponential(3) : y.toPrecision(6);
+            ctx.fillStyle = "#0f172a";
+            const yTxt = fmtReal(y);
             ctx.textAlign = "left";
             ctx.textBaseline = "bottom";
             ctx.fillText(`${s.name}: y=${yTxt}`, P.px + 6, P.py - 2);
@@ -303,14 +329,15 @@ export default function App() {
          }
        }
 
-      // Hover crosshair
+      // Hover crosshair + more visible
       if (hoverRef.current.x !== null && hoverRef.current.y !== null) {
         const P = dataToPixel(hoverRef.current.x, hoverRef.current.y), rr = innerRect();
-        ctx.save(); ctx.strokeStyle = "#9CA3AF"; ctx.setLineDash([4,3]);
+        ctx.save(); ctx.strokeStyle = "#94a3b8"; ctx.setLineDash([4,3]);
         ctx.beginPath(); ctx.moveTo(P.px, rr.y); ctx.lineTo(P.px, rr.y + rr.h); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); ctx.restore(); drawCross(ctx, P.px, P.py, 6);
+        ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); ctx.restore(); drawCross(ctx, P.px, P.py, 7);
       }
 
+      // Border + axis labels
       ctx.strokeStyle = "#374151"; ctx.lineWidth = 1.2; ctx.strokeRect(r.x, r.y, r.w, r.h);
       ctx.fillStyle = "#111827"; ctx.font = "14px ui-sans-serif, system-ui"; ctx.textAlign = "center"; ctx.fillText(xLog?"X (10^n)":"X", r.x + r.w/2, r.y + r.h + 34);
       ctx.save(); ctx.translate(r.x-45, r.y + r.h/2); ctx.rotate(-Math.PI/2); ctx.fillText(yLog?"Y (10^n)":"Y", 0, 0); ctx.restore();
@@ -325,8 +352,22 @@ export default function App() {
         ctx.beginPath(); ctx.moveTo(size.w - sz - 16 + sz/2, 16); ctx.lineTo(size.w - sz - 16 + sz/2, 16+sz); ctx.moveTo(size.w - sz - 16, 16+sz/2); ctx.lineTo(size.w - 16, 16+sz/2); ctx.stroke(); ctx.restore();
       }
 
-      // Legend
-      ctx.save(); ctx.font = "12px ui-sans-serif, system-ui"; let lx = r.x + 8, ly = r.y + 16; series.forEach((s,i)=>{ ctx.fillStyle = s.color; ctx.fillRect(lx, ly-8, 10, 10); ctx.fillStyle = "#111827"; ctx.fillText(`${s.name} (${s.points.length})${i===activeSeries?" <-":""}`, lx+16, ly); ly += 16; }); ctx.restore();
+      // Legend — bigger, left-aligned, avoid overlap
+      ctx.save();
+      const rbox = innerRect();
+      ctx.font = "600 16px ui-sans-serif, system-ui";
+      let lx = rbox.x + 10, ly = rbox.y + 20;
+      const box = 12, gap = 10;
+      series.forEach((s,i)=>{
+        ctx.fillStyle = s.color;
+        ctx.fillRect(lx, ly - box + 2, box, box);
+        ctx.fillStyle = "#0f172a";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillText(`${s.name} (${s.points.length})${i===activeSeries?"  ◀":""}`, lx + box + gap, ly + 2);
+        ly += 22;
+      });
+      ctx.restore();
     } catch (err) {
       console.error("draw error", err); setToast({ msg: "Render error. Axes reset.", kind: "err" });
       setXMin(10); setXMax(1_000_000); setYMin(0.0001); setYMax(1_000_000);
@@ -454,198 +495,266 @@ export default function App() {
 
   /* ==== UI ==== */
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white p-6 text-gray-900">
-      <h1 className="mb-3 text-3xl font-semibold tracking-tight">Log-scale Graph Digitizer</h1>
+    <div className="min-h-screen bg-gradient-to-b from-white via-slate-50 to-white p-6 text-slate-900">
 
-      <div className="inline-block rounded-2xl border border-gray-200 bg-white p-3 shadow-lg">
-        <canvas
-          ref={canvasRef}
-          width={size.w}
-          height={size.h}
-          className="touch-none select-none"
-          style={{
-            cursor: pickAnchor
-              ? "crosshair"
-              : (bgEditMode
-                  ? (hoverHandle === "left" || hoverHandle === "right")
-                      ? "ew-resize"
-                      : (hoverHandle === "top" || hoverHandle === "bottom")
-                        ? "ns-resize"
-                        : (hoverHandle === "uniform")
-                          ? "nwse-resize"
-                          : "move"
-                  : "crosshair")
-          }}
-          onMouseMove={onMouseMove}
-          onMouseDown={onMouseDown}
-          onMouseUp={onMouseUp}
-          onMouseLeave={onMouseLeave}
-          onWheel={onWheel}
-          onDragOver={(e)=>e.preventDefault()}
-          onDrop={(e)=>{ e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg); }}
-          onContextMenu={(e)=>{ e.preventDefault(); if(pickAnchor) setPickAnchor(false); }}
-        />
+      {/* Top toolbar */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        <button onClick={()=>{ let out = "series,x,y\n"; series.forEach(s=> s.points.forEach(p=> out += `${s.name},${p.x},${p.y}\n`)); const url = URL.createObjectURL(new Blob([out],{type:"text/csv"})); const a=document.createElement("a"); a.href=url; a.download=`points_${Date.now()}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); }} className="rounded-xl bg-slate-900 px-3 py-1.5 text-white">Export CSV</button>
+        <button onClick={()=>{ const c = canvasRef.current; if(!c) return; const url=c.toDataURL("image/png"); const a=document.createElement("a"); a.href=url; a.download=`digitizer_${Date.now()}.png`; a.click(); }} className="rounded-xl bg-blue-600 px-3 py-1.5 text-white">Export PNG</button>
+        <button onClick={savePresetFile} className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200">Save preset (JSON)</button>
+        <button onClick={()=> presetFileRef.current?.click()} className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200">Load preset (file)</button>
+        <input ref={presetFileRef} type="file" accept="application/json" style={{display:"none"}} aria-hidden="true" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) loadPresetFromFile(f); (e.target as any).value=""; }} />
+        <button onClick={copyShareURL} className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200">Copy URL</button>
+        <button onClick={()=>{ setXMin(10); setXMax(1_000_000); setYMin(0.0001); setYMax(1_000_000); setXLog(true); setYLog(true); notify("Axes reset"); }} className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200">Reset Axes</button>
+        <button onClick={()=>{ try{ localStorage.removeItem("digitizer:auto"); location.hash=""; notify("Hard reset done"); }catch{} }} className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200">Hard Reset</button>
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-700">
-        <div>
-          {hoverRef.current.x !== null && hoverRef.current.y !== null ? (
-            <span>Cursor: x={xLog ? hoverRef.current.x!.toExponential(3) : hoverRef.current.x!.toPrecision(6)}, y={yLog ? hoverRef.current.y!.toExponential(3) : hoverRef.current.y!.toPrecision(6)}</span>
-          ) : (
-            <span>Cursor: -</span>
-          )}
-        </div>
+      {/* Main 3-column layout */}
+      <div className="grid grid-cols-[240px,1fr,320px] gap-4">
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:s.points.slice(0,Math.max(0,s.points.length-1)) }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Undo</button>
-          <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:[] }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Clear</button>
-          <button onClick={()=>{ let out = "series,x,y\n"; series.forEach(s=> s.points.forEach(p=> out += `${s.name},${p.x},${p.y}\n`)); const url = URL.createObjectURL(new Blob([out],{type:"text/csv"})); const a=document.createElement("a"); a.href=url; a.download=`points_${Date.now()}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Export CSV</button>
-          <button onClick={()=>{ const c = canvasRef.current; if(!c) return; const url=c.toDataURL("image/png"); const a=document.createElement("a"); a.href=url; a.download=`digitizer_${Date.now()}.png`; a.click(); }} className="rounded-xl bg-blue-600 px-3 py-1 text-white hover:bg-blue-700">Export PNG</button>
+        {/* Left: Image panel */}
+        <aside className="rounded-3xl bg-slate-800 text-white p-4 sticky top-4 h-max shadow-[0_6px_24px_rgba(0,0,0,0.08)]">
+          <h2 className="text-lg font-semibold mb-3">Image</h2>
 
-          <span className="mx-1 h-5 w-px bg-gray-200" />
+          <div className="space-y-3 text-sm">
+            <button onClick={()=> setBgEditMode(v=>!v)} className={`w-full rounded-lg px-3 py-2 ${bgEditMode?"bg-amber-100 text-slate-900":"bg-slate-700 hover:bg-slate-600"}`}>{bgEditMode?"BG Edit ON":"BG Edit OFF"}</button>
 
-          <button onClick={savePresetFile} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Save preset (JSON)</button>
-          <button onClick={()=> presetFileRef.current?.click()} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Load preset (file)</button>
-          <input ref={presetFileRef} type="file" accept="application/json" style={{display:"none"}} aria-hidden="true" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) loadPresetFromFile(f); (e.target as any).value=""; }} />
-          <button onClick={copyShareURL} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Copy URL</button>
-          <button onClick={()=>{ setXMin(10); setXMax(1_000_000); setYMin(0.0001); setYMax(1_000_000); setXLog(true); setYLog(true); notify("Axes reset"); }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Reset Axes</button>
-          <button onClick={()=>{ try{ localStorage.removeItem("digitizer:auto"); location.hash=""; notify("Hard reset done"); }catch{} }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Hard Reset</button>
-        </div>
-      </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={()=> fileARef.current?.click()} className="rounded-lg bg-slate-700 hover:bg-slate-600 px-3 py-2">Load A</button>
+              <button onClick={()=> fileBRef.current?.click()} className="rounded-lg bg-slate-700 hover:bg-slate-600 px-3 py-2">Load B</button>
+              <input ref={fileARef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
+                onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
+              <input ref={fileBRef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
+                onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
+            </div>
 
-      {/* Guides (inline result) */}
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-medium">Guide X:</span>
-        <input
-          placeholder="예: 1000"
-          value={guideInput}
-          onChange={(e)=> {
-            setGuideInput(e.target.value);
-            const v = Number(e.target.value);
-            setInlineX(isFinite(v) && v>0 ? v : null);
-          }}
-          onKeyDown={(e)=> {
-            if (e.key === "Enter") {
-              const v = Number(guideInput);
-              if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); }
-            }
-          }}
-          className="rounded border px-2 py-1 w-28"
-        />
-        <button
-          className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{
-            const v = Number(guideInput);
-            if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); }
-          }}
-        >Add</button>
-        <button
-          className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{ setGuideXs([]); setInlineX(null); setGuideInput(""); }}
-        >Clear</button>
+            <div className="flex items-center justify-between gap-2">
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={showAB[0]} onChange={(e)=>setShowAB(([a,b])=>[e.target.checked,b])} /> Show A
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={showAB[1]} onChange={(e)=>setShowAB(([a,b])=>[a,e.target.checked])} /> Show B
+              </label>
+            </div>
 
-        <span className="ml-2 text-gray-700">
-          {inlineX !== null
-            ? <>X={<span className="font-mono">{xLog ? inlineX.toExponential(3) : inlineX.toPrecision(6)}</span>} &nbsp;→&nbsp; {inlineLabelForX(inlineX)}</>
-            : <span className="text-gray-400">(값 입력 후 Enter/추가)</span>}
-        </span>
-
-        <button
-          className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{
-            if (hoverRef.current.x !== null) {
-              const v = hoverRef.current.x!;
-              setGuideXs(g => Array.from(new Set([...g, v])));
-              setInlineX(v);
-              setGuideInput(String(v));
-            }
-          }}
-        >Add from Cursor</button>
-      </div>
-
-      <div className="mt-4 grid gap-5 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg md:grid-cols-2">
-        <section>
-          <h2 className="mb-2 font-semibold">Axes</h2>
-          <div className="mb-1 flex items-center gap-3 text-sm">
-            <label className="flex items-center gap-1"><input type="checkbox" checked={xLog} onChange={(e)=>setXLog(e.target.checked)} /> X Log10</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={yLog} onChange={(e)=>setYLog(e.target.checked)} /> Y Log10</label>
-          </div>
-          <div className="grid grid-cols-4 gap-2 text-sm">
-            <label className="col-span-2 flex items-center gap-1">X min <input className="w-full rounded border px-2 py-1" value={xMin} onChange={(e)=>setXMin(Number(e.target.value))} /></label>
-            <label className="col-span-2 flex items-center gap-1">X max <input className="w-full rounded border px-2 py-1" value={xMax} onChange={(e)=>setXMax(Number(e.target.value))} /></label>
-            <label className="col-span-2 flex items-center gap-1">Y min <input className="w-full rounded border px-2 py-1" value={yMin} onChange={(e)=>setYMin(Number(e.target.value))} /></label>
-            <label className="col-span-2 flex items-center gap-1">Y max <input className="w-full rounded border px-2 py-1" value={yMax} onChange={(e)=>setYMax(Number(e.target.value))} /></label>
-          </div>
-        </section>
-
-        <section>
-          <h2 className="mb-2 font-semibold">Series</h2>
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===0} onChange={()=>setActiveSeries(0)} /> Series A</label>
-            <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===1} onChange={()=>setActiveSeries(1)} /> Series B</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect</label>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-sm">
-            <label className="col-span-3 flex items-center gap-2">
-              Series A name
-              <input className="w-full rounded border px-2 py-1" value={series[0].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===0? {...s, name:e.target.value}: s))} />
+            <label className="flex items-center gap-2 text-xs">A α
+              <input type="range" min={0} max={1} step={0.05} value={opacityAB[0]} onChange={(e)=> setOpacityAB(([a,b])=>[Number(e.target.value), b])} />
             </label>
-            <label className="col-span-3 flex items-center gap-2">
-              Series B name
-              <input className="w-full rounded border px-2 py-1" value={series[1].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===1? {...s, name:e.target.value}: s))} />
+            <label className="flex items-center gap-2 text-xs">B α
+              <input type="range" min={0} max={1} step={0.05} value={opacityAB[1]} onChange={(e)=> setOpacityAB(([a,b])=>[a, Number(e.target.value)])} />
             </label>
 
-            <label className="flex items-center gap-1">Width <input className="w-full rounded border px-2 py-1" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
-            <label className="col-span-2 flex items-center gap-2">Alpha <input type="range" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} className="w-full" /> <span>{lineAlpha.toFixed(2)}</span></label>
+            <div className="h-px bg-slate-600 my-2" />
 
-            <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> Smooth curve (Catmull-Rom)</label>
+            <div className="flex items-center gap-2 text-xs">
+              <label className="flex items-center gap-2"><input type="radio" name="activebg" checked={activeBg===0} onChange={()=>setActiveBg(0)} /> Edit A</label>
+              <label className="flex items-center gap-2"><input type="radio" name="activebg" checked={activeBg===1} onChange={()=>setActiveBg(1)} /> Edit B</label>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={keepAspect} onChange={(e)=>setKeepAspect(e.target.checked)} /> Keep ratio</label>
+
+            <div className="h-px bg-slate-600 my-2" />
+
+            <div className="flex items-center gap-2 text-xs">
+              <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="center"} onChange={()=>setAnchorMode("center")} /> Center</label>
+              <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="custom"} onChange={()=>setAnchorMode("custom")} /> Custom</label>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={()=> setPickAnchor(v=>!v)} className={`rounded-lg px-2 py-2 ${pickAnchor?"bg-amber-100 text-slate-900":"bg-slate-700 hover:bg-slate-600"}`}>Pick Anchor</button>
+              <button onClick={()=>{ setCustomAnchors(cur=>{ const n=[...cur] as any; n[activeBg]=null; return n; }); setAnchorMode("custom"); }} className="rounded-lg bg-slate-700 hover:bg-slate-600 px-2 py-2">Clear Anchor</button>
+            </div>
+
+            <div className="h-px bg-slate-600 my-2" />
+
+            <label className="flex items-center justify-between gap-2 text-xs">
+              <span>Magnifier</span>
+              <input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} />
+            </label>
+            <label className="flex items-center gap-2 text-xs">Zoom
+              <input type="range" min={2} max={8} step={1} value={magnifyFactor} onChange={(e)=>setMagnifyFactor(Number(e.target.value))} />
+            </label>
+
+            {loadError[activeBg] && <p className="mt-1 text-xs text-amber-300">{loadError[activeBg]}</p>}
+          </div>
+        </aside>
+
+        {/* Center: Canvas card */}
+        <main className="rounded-3xl border border-slate-200 bg-white p-3 shadow-[0_8px_30px_rgb(0,0,0,0.06)]">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
+            {/* Cursor info */}
+            <div>
+              {hoverRef.current.x !== null && hoverRef.current.y !== null ? (() => {
+                const cx = hoverRef.current.x!, cy = hoverRef.current.y!;
+                const xs = series.map(s => `${s.name}:${fmtReal(yAtX(s.points, cx))}`).join("  |  ");
+                const ys = series.map(s => `${s.name}:${fmtReal(xAtY(s.points, cy))}`).join("  |  ");
+                return (
+                  <span className="font-medium">
+                    Cursor · X={fmtReal(cx)} , Y={fmtReal(cy)}
+                    <span className="ml-3 text-slate-600">At X → {xs}</span>
+                    <span className="ml-3 text-slate-600">At Y → {ys}</span>
+                  </span>
+                );
+              })() : (
+                <span>Cursor: -</span>
+              )}
+            </div>
+
+            {/* Undo/Clear active series */}
+            <div className="flex items-center gap-2">
+              <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:s.points.slice(0,Math.max(0,s.points.length-1)) }: s))} className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200">Undo</button>
+              <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:[] }: s))} className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200">Clear</button>
+            </div>
+          </div>
+
+          {/* Canvas */}
+          <div className="inline-block rounded-2xl border border-slate-200 bg-white p-2">
+            <canvas
+              ref={canvasRef}
+              width={size.w}
+              height={size.h}
+              className="touch-none select-none"
+              style={{
+                cursor: pickAnchor
+                  ? "crosshair"
+                  : (bgEditMode
+                      ? (hoverHandle === "left" || hoverHandle === "right")
+                          ? "ew-resize"
+                          : (hoverHandle === "top" || hoverHandle === "bottom")
+                            ? "ns-resize"
+                            : (hoverHandle === "uniform")
+                              ? "nwse-resize"
+                              : "move"
+                      : "crosshair")
+              }}
+              onMouseMove={onMouseMove}
+              onMouseDown={onMouseDown}
+              onMouseUp={onMouseUp}
+              onMouseLeave={onMouseLeave}
+              onWheel={onWheel}
+              onDragOver={(e)=>e.preventDefault()}
+              onDrop={(e)=>{ e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg); }}
+              onContextMenu={(e)=>{ e.preventDefault(); if(pickAnchor) setPickAnchor(false); }}
+            />
+          </div>
+
+          {/* Guides inline control */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-medium">Guide X:</span>
+            <input
+              placeholder="예: 1000"
+              value={guideInput}
+              onChange={(e)=> {
+                setGuideInput(e.target.value);
+                const v = Number(e.target.value);
+                setInlineX(isFinite(v) && v>0 ? v : null);
+              }}
+              onKeyDown={(e)=> {
+                if (e.key === "Enter") {
+                  const v = Number(guideInput);
+                  if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); }
+                }
+              }}
+              className="rounded border px-2 py-1 w-28"
+            />
+            <button
+              className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200"
+              onClick={()=>{
+                const v = Number(guideInput);
+                if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); }
+              }}
+            >Add</button>
+            <button
+              className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200"
+              onClick={()=>{ setGuideXs([]); setInlineX(null); setGuideInput(""); }}
+            >Clear</button>
+
+            <span className="ml-2 text-slate-700">
+              {inlineX !== null
+                ? <>X={<span className="font-mono">{fmtReal(inlineX)}</span>} &nbsp;→&nbsp; {inlineLabelForX(inlineX)}</>
+                : <span className="text-slate-400">(값 입력 후 Enter/추가)</span>}
+            </span>
+
+            <button
+              className="rounded-xl bg-slate-100 px-3 py-1.5 hover:bg-slate-200"
+              onClick={()=>{
+                if (hoverRef.current.x !== null) {
+                  const v = hoverRef.current.x!;
+                  setGuideXs(g => Array.from(new Set([...g, v])));
+                  setInlineX(v);
+                  setGuideInput(String(v));
+                }
+              }}
+            >Add from Cursor</button>
+          </div>
+        </main>
+
+        {/* Right: Graph panel (series & lines) */}
+        <aside className="rounded-3xl bg-slate-800 text-white p-4 sticky top-4 h-max shadow-[0_6px_24px_rgba(0,0,0,0.08)]">
+          <h2 className="text-lg font-semibold mb-3">Graph</h2>
+
+          <div className="space-y-3 text-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===0} onChange={()=>setActiveSeries(0)} /> Series A</label>
+              <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===1} onChange={()=>setActiveSeries(1)} /> Series B</label>
+              <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect</label>
+            </div>
+
+            <label className="flex items-center gap-2">
+              <span className="w-28">Series A name</span>
+              <input className="flex-1 rounded border px-2 py-1 text-slate-900" value={series[0].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===0? {...s, name:e.target.value}: s))} />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="w-28">Series B name</span>
+              <input className="flex-1 rounded border px-2 py-1 text-slate-900" value={series[1].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===1? {...s, name:e.target.value}: s))} />
+            </label>
+
+            <label className="flex items-center gap-2">
+              <span className="w-28">Width</span>
+              <input className="flex-1 rounded border px-2 py-1 text-slate-900" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} />
+            </label>
+
+            <label className="flex items-center gap-2">
+              <span className="w-28">Alpha</span>
+              <input type="range" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} className="flex-1" />
+              <span>{lineAlpha.toFixed(2)}</span>
+            </label>
+
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> <span>Smooth curve (Catmull-Rom)</span>
+            </label>
             {smoothLines && (
-              <label className="flex items-center gap-2 col-span-3">
-                Smoothness
-                <input type="range" min={0} max={0.9} step={0.05} value={smoothAlpha} onChange={(e)=>setSmoothAlpha(Number(e.target.value))} className="w-full" />
+              <label className="flex items-center gap-2">
+                <span className="w-28">Smoothness</span>
+                <input type="range" min={0} max={0.9} step={0.05} value={smoothAlpha} onChange={(e)=>setSmoothAlpha(Number(e.target.value))} className="flex-1" />
                 <span>{smoothAlpha.toFixed(2)}</span>
               </label>
             )}
 
-            <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={showPoints} onChange={(e)=>setShowPoints(e.target.checked)} /> Show points</label>
-            <label className="flex items-center gap-2 col-span-3">Point size <input type="range" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} className="w-full" /> <span>{ptRadius}px</span></label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={showPoints} onChange={(e)=>setShowPoints(e.target.checked)} /> <span>Show points</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="w-28">Point size</span>
+              <input type="range" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} className="flex-1" />
+              <span>{ptRadius}px</span>
+            </label>
           </div>
-        </section>
+        </aside>
+      </div>
 
-        <section>
-          <h2 className="mb-2 font-semibold">Image A/B</h2>
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-2"><input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} /> Magnifier</label>
-            <label className="flex items-center gap-2">Zoom <input type="range" min={2} max={8} step={1} value={magnifyFactor} onChange={(e)=>setMagnifyFactor(Number(e.target.value))} /></label>
-          </div>
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-1"><input type="radio" name="activebg" checked={activeBg===0} onChange={()=>setActiveBg(0)} /> Edit A</label>
-            <label className="flex items-center gap-1"><input type="radio" name="activebg" checked={activeBg===1} onChange={()=>setActiveBg(1)} /> Edit B</label>
-            <span className="mx-1 h-4 w-px bg-gray-200" />
-            <label className="flex items-center gap-1"><input type="checkbox" checked={showAB[0]} onChange={(e)=>setShowAB(([a,b])=>[e.target.checked,b])} /> Show A</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={showAB[1]} onChange={(e)=>setShowAB(([a,b])=>[a,e.target.checked])} /> Show B</label>
-            <label className="flex items-center gap-1">A α <input type="range" min={0} max={1} step={0.05} value={opacityAB[0]} onChange={(e)=> setOpacityAB(([a,b])=>[Number(e.target.value), b])} /></label>
-            <label className="flex items-center gap-1">B α <input type="range" min={0} max={1} step={0.05} value={opacityAB[1]} onChange={(e)=> setOpacityAB(([a,b])=>[a, Number(e.target.value)])} /></label>
-          </div>
-          <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-            <button onClick={()=> fileARef.current?.click()} className="rounded-lg border px-2 py-1">Load Image A</button>
-            <button onClick={()=> fileBRef.current?.click()} className="rounded-lg border px-2 py-1">Load Image B</button>
-            <input ref={fileARef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
-              onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
-            <input ref={fileBRef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
-              onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
-            <span className="mx-1 h-4 w-px bg-gray-200" />
-            <button onClick={()=> setBgEditMode(v=>!v)} className={`rounded-lg px-2 py-1 ${bgEditMode?"bg-amber-100 border border-amber-300":"border"}`}>{bgEditMode?"BG Edit ON":"BG Edit OFF"}</button>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={keepAspect} onChange={(e)=>setKeepAspect(e.target.checked)} /> Keep ratio</label>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="center"} onChange={()=>setAnchorMode("center")} /> Center</label>
-            <label className="flex items-center gap-2"><input type="radio" name="anchor" checked={anchorMode==="custom"} onChange={()=>setAnchorMode("custom")} /> Custom</label>
-            <button onClick={()=>{ setPickAnchor(v=>!v); }} className={`rounded-lg px-2 py-1 ${pickAnchor?"bg-amber-100 border border-amber-300":"border"}`}>Pick Anchor</button>
-            <button onClick={()=>{ setCustomAnchors(cur=>{ const n=[...cur] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return n; }); setAnchorMode("custom"); }} className="rounded-lg border px-2 py-1">Clear Anchor</button>
-          </div>
-          {loadError[activeBg] && <p className="mt-2 text-sm text-red-600">{loadError[activeBg]}</p>}
-        </section>
+      {/* Bottom: Axes bar */}
+      <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_6px_24px_rgba(0,0,0,0.06)]">
+        <h2 className="mb-3 text-lg font-semibold text-slate-800">Axes</h2>
+        <div className="mb-2 flex items-center gap-4 text-sm">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={xLog} onChange={(e)=>setXLog(e.target.checked)} /> X Log10</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={yLog} onChange={(e)=>setYLog(e.target.checked)} /> Y Log10</label>
+        </div>
+        <div className="grid grid-cols-4 gap-2 text-sm">
+          <label className="col-span-2 flex items-center gap-2">X min <input className="w-full rounded border px-2 py-1" value={xMin} onChange={(e)=>setXMin(Number(e.target.value))} /></label>
+          <label className="col-span-2 flex items-center gap-2">X max <input className="w-full rounded border px-2 py-1" value={xMax} onChange={(e)=>setXMax(Number(e.target.value))} /></label>
+          <label className="col-span-2 flex items-center gap-2">Y min <input className="w-full rounded border px-2 py-1" value={yMin} onChange={(e)=>setYMin(Number(e.target.value))} /></label>
+          <label className="col-span-2 flex items-center gap-2">Y max <input className="w-full rounded border px-2 py-1" value={yMax} onChange={(e)=>setYMax(Number(e.target.value))} /></label>
+        </div>
       </div>
 
       {toast && (
