@@ -1,3 +1,7 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* (선택) 전체 배경/폰트 살짝 다듬기 */
+html, body, #root { height: 100%; }
+body { @apply bg-gray-100 text-gray-800; }
