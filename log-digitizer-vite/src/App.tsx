@@ -3,11 +3,11 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Log-scale Graph Digitizer — single file
- * v4.2-fix
- * - custom-anchor 모드에서 이미지 드래그/이동 금지 (offX/offY 무시 + 드래그 차단)
- * - 커서 매핑 개선(앵커 고정 시 move 커서 비표시)
- * - 우측 좌표 패널의 Points 표를 시리즈별 분리 렌더
- * - Guides 표는 입력한 값 그대로 표시 유지
+ * v4.2
+ * - fix: custom-anchor 모드에서 이미지 드래그/이동 불가 → offX/offY 적용
+ * - UI: Magnifier 위치 이동(Series 헤더), Guides를 Series 끝으로 이동
+ * - UI: 우측(하단) 좌표 패널 추가(Points / Guides 별도 표)
+ * - 헤더에 Undo Last Point / Clear Active Series 배치
  */
 
 type Pt = { x: number; y: number };
@@ -62,7 +62,7 @@ export default function App() {
   const [ptRadius, setPtRadius] = useState(5);
   const [showPoints, setShowPoints] = useState(true);
 
-  // Magnifier
+  // Magnifier → Series 헤더 옆으로 이동 (UI만 이동, 상태는 동일)
   const [magnifyOn, setMagnifyOn] = useState(false);
   const [magnifyFactor, setMagnifyFactor] = useState(3);
 
@@ -83,7 +83,7 @@ export default function App() {
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" } | null>(null);
   const [tick, setTick] = useState(0);
 
-  // Guides
+  // Guides (→ Series 끝으로 UI 이동)
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [guideInput, setGuideInput] = useState("");
   const [guideYs, setGuideYs] = useState<number[]>([]);
@@ -180,7 +180,7 @@ export default function App() {
     return { x, y, w, h };
   };
 
-  // ⛔ 드래그 금지 정책: custom-anchor 모드에서 앵커가 설정된 경우 offX/offY는 무시(=고정)
+  // ★ 핵심 수정: custom 모드에서도 offX/offY 적용 → 이미지 드래그/이동 정상 동작
   const drawRectAndAnchor = (idx: 0 | 1) => {
     const base = baseRect(idx), xf = currentState.bgXform[idx], CA = currentState.customAnchors[idx];
     const dw = base.w * clampS(xf.sx), dh = base.h * clampS(xf.sy);
@@ -189,9 +189,8 @@ export default function App() {
     if (anchorMode === "custom") {
       const dax = CA ? CA.ax : base.x;
       const day = CA ? CA.ay : base.y + base.h;
-      // ✅ custom + anchor 존재 시 오프셋 무시(고정), anchor 미설정 시에도 offX/offY 미적용
-      ax = dax;
-      ay = day;
+      ax = dax + xf.offX;            // ← offX 적용
+      ay = day + xf.offY;            // ← offY 적용
       fx = CA ? CA.fx : 0;
       fy = CA ? CA.fy : 1;
     } else {
@@ -234,7 +233,7 @@ export default function App() {
     return () => window.removeEventListener("paste", onPaste as any);
   }, [activeBg]);
 
-  /* ==== 키보드 ==== */
+  /* ==== 키보드: 포인트/이미지 미세이동 ==== */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { setPickAnchor(false); setSelectedPoint(null); }
@@ -263,9 +262,6 @@ export default function App() {
       }
 
       if (bgEditMode) {
-        // 화살표로도 이동 금지 조건은 onMouseMove/Down에서 이미 처리되지만, 키보드도 동일 정책
-        const anchored = !!currentState.customAnchors[activeBg];
-        if (anchorMode === "custom" && anchored) return; // 고정
         const step = e.shiftKey ? 10 : 1;
         updateState(prev => {
           const n = [...prev.bgXform] as [BgXf, BgXf];
@@ -284,10 +280,9 @@ export default function App() {
   }, [selectedPoint, bgEditMode, activeBg, currentState]);
 
   /* ==== 커서 매핑 ==== */
-  function cursorForHandle(handle: Handle, bgEdit: boolean, picking: boolean, anchored: boolean) {
+  function cursorForHandle(handle: Handle, bgEdit: boolean, picking: boolean) {
     if (picking) return "crosshair";
     if (!bgEdit) return "crosshair";
-    if (anchored && handle === "none") return "default"; // 앵커 고정 시 move 금지
     switch (handle) {
       case "left":
       case "right":
@@ -302,7 +297,7 @@ export default function App() {
     }
   }
 
-  /* ==== 그리드/패스 ==== */
+  /* ==== 그리드, 패스 등 ==== */
   const SUPMAP: Record<string, string> = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "-": "⁻", "+": "⁺", ".": "." };
   const sup = (s: number | string) => String(s).split("").map(ch => SUPMAP[ch] ?? ch).join("");
   const pow10Label = (n: number) => `10${sup(n)}`;
@@ -601,7 +596,6 @@ export default function App() {
       hoverRef.current = { x: null, y: null };
     }
 
-    // resize
     if (resizeRef.current.active && bgEditMode) {
       const { fx, fy, ax, ay, baseW, baseH, mode } = resizeRef.current;
       const safe = (v: number) => (Math.abs(v) < 1e-6 ? 1e-6 : v);
@@ -630,12 +624,7 @@ export default function App() {
       return;
     }
 
-    // drag (앵커 존재 시 이동 금지)
     if (dragRef.current.active && bgEditMode) {
-      const anchored = !!currentState.customAnchors[activeBg];
-      if (anchorMode === "custom" && anchored) {
-        return; // 고정
-      }
       updateState(prev => {
         const n = [...prev.bgXform] as [BgXf, BgXf];
         const xf = n[activeBg];
@@ -666,20 +655,11 @@ export default function App() {
 
     if (bgEditMode) {
       const h = pickHandle(px, py);
-      const anchored = !!currentState.customAnchors[activeBg];
-
       if (h !== "none") {
         const d = drawRectAndAnchor(activeBg);
         resizeRef.current = { active: true, mode: h, ax: d.ax, ay: d.ay, fx: d.fx, fy: d.fy, baseW: d.baseW, baseH: d.baseH };
       } else {
-        // ⛔ custom + anchored ⇒ 드래그 시작하지 않음
-        if (anchorMode === "custom" && anchored) {
-          setSelectedPoint(null);
-          return;
-        }
-        if (overImage(px, py)) {
-          dragRef.current = { active: true, startX: px, startY: py, baseX: currentState.bgXform[activeBg].offX, baseY: currentState.bgXform[activeBg].offY };
-        }
+        dragRef.current = { active: true, startX: px, startY: py, baseX: currentState.bgXform[activeBg].offX, baseY: currentState.bgXform[activeBg].offY };
       }
       setSelectedPoint(null);
       return;
@@ -807,10 +787,10 @@ export default function App() {
   if (!currentState) return <div className="flex h-screen items-center justify-center">Loading...</div>;
 
   /* ======= 좌표 패널 데이터 ======= */
-  // Points: 시리즈별로 묶어서 렌더 (표시는 아래에서 각 시리즈 블록으로)
-  const pointsBySeries = currentState.series;
+  const pointRows = currentState.series
+    .flatMap((s) => s.points.map((p) => ({ series: s.name, x: p.x, y: p.y })))
+    .sort((a, b) => a.x - b.x);
 
-  // Guides: X/Y 입력값 그대로 표시 + 계산 값
   const guideRows: Array<{ kind: "X" | "Y"; guide: number; series: string; value: number | null }> = [];
   for (const gx of guideXs) {
     currentState.series.forEach(s => guideRows.push({ kind: "X", guide: gx, series: s.name, value: yAtX(s.points, gx) }));
@@ -819,15 +799,13 @@ export default function App() {
     currentState.series.forEach(s => guideRows.push({ kind: "Y", guide: gy, series: s.name, value: xAtY(s.points, gy) }));
   }
 
-  const anchoredNow = !!currentState.customAnchors[activeBg];
-
   return (
     <div className="min-h-screen bg-gray-100 text-gray-800 font-sans antialiased">
       {/* Header */}
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/80 p-4 backdrop-blur-sm">
         <h1 className="text-xl font-bold text-gray-900">Log-scale Graph Digitizer</h1>
         <div className="flex flex-wrap items-center gap-3 text-base">
-          {/* 상단으로 이동한 버튼 */}
+          {/* ★ 최상단으로 이동한 버튼 */}
           <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:s.points.slice(0,-1)}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300">Undo Last Point</button>
           <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:[]}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active Series</button>
 
@@ -895,7 +873,7 @@ export default function App() {
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-xl font-bold text-gray-800">Series & Points</h3>
-              {/* Magnifier 토글 */}
+              {/* ★ Magnifier를 여기로 이동 */}
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} />
                 Magnifier
@@ -924,7 +902,7 @@ export default function App() {
                 <label className="col-span-2 flex items-center gap-3">Size <input type="range" className="w-full" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} /></label>
               </div>
 
-              {/* Guides UI (Series 끝) */}
+              {/* ★ Guides UI → Series 마지막으로 이동 */}
               <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
                 <div className="flex items-center justify-between">
                   <h4 className="font-semibold text-gray-600">Guides</h4>
@@ -961,59 +939,48 @@ export default function App() {
               width={size.w}
               height={size.h}
               className="block touch-none select-none"
-              style={{ cursor: cursorForHandle(hoverHandle, bgEditMode, pickAnchor, anchoredNow) as any }}
+              style={{ cursor: cursorForHandle(hoverHandle, bgEditMode, pickAnchor) as any }}
               onMouseMove={onMouseMove}
               onMouseDown={onMouseDown}
               onMouseUp={onMouseUp}
               onMouseLeave={onMouseLeave}
-              onWheel={(e)=>{ if(!bgEditMode) return; e.preventDefault();
-                // 휠 줌은 앵커고정과 무관하게 스케일만 변경 허용
-                const k = e.deltaY < 0 ? 1.05 : 0.95;
-                updateState(prev=>{const n=[...prev.bgXform] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf, sx: nsx, sy: keepAspect?nsx:nsy}; return {...prev, bgXform:n};});
-              }}
+              onWheel={(e)=>{ if(!bgEditMode) return; e.preventDefault(); const k = e.deltaY < 0 ? 1.05 : 0.95; updateState(prev=>{const n=[...prev.bgXform] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf, sx: nsx, sy: keepAspect?nsx:nsy}; return {...prev, bgXform:n};}); }}
               onDragOver={(e)=>e.preventDefault()}
               onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg);}}
               onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
             />
           </div>
 
-          {/* 좌표 패널 */}
+          {/* ★ 좌표 패널 (캔버스 하단) */}
           <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-            {/* Points (시리즈별 분리) */}
+            {/* Points Table */}
             <div className="rounded-lg border border-gray-200">
               <div className="border-b px-4 py-2 font-semibold text-gray-700">Points</div>
-              <div className="max-h-64 overflow-auto p-3">
-                {pointsBySeries.map((s, si) => (
-                  <div key={si} className="mb-3">
-                    <div className="mb-1 font-semibold" style={{ color: s.color }}>{s.name}</div>
-                    {s.points.length === 0 ? (
-                      <div className="text-sm text-gray-500">No points</div>
-                    ) : (
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-gray-500">
-                            <th className="py-1 pr-2 text-left">#</th>
-                            <th className="py-1 pr-2 text-right">X</th>
-                            <th className="py-1 pr-0 text-right">Y</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {s.points.map((p, i) => (
-                            <tr key={i} className="border-t">
-                              <td className="py-1 pr-2">{i + 1}</td>
-                              <td className="py-1 pr-2 text-right font-mono">{fmtReal(p.x)}</td>
-                              <td className="py-1 pr-0 text-right font-mono">{fmtReal(p.y)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                ))}
+              <div className="max-h-64 overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Series</th>
+                      <th className="px-3 py-2 text-right">X</th>
+                      <th className="px-3 py-2 text-right">Y</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pointRows.length === 0 ? (
+                      <tr><td className="px-3 py-2 text-gray-400" colSpan={3}>No points</td></tr>
+                    ) : pointRows.map((r, i) => (
+                      <tr key={i} className="odd:bg-white even:bg-gray-50">
+                        <td className="px-3 py-1">{r.series}</td>
+                        <td className="px-3 py-1 text-right font-mono">{fmtReal(r.x)}</td>
+                        <td className="px-3 py-1 text-right font-mono">{fmtReal(r.y)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            {/* Guides */}
+            {/* Guides Table */}
             <div className="rounded-lg border border-gray-200">
               <div className="border-b px-4 py-2 font-semibold text-gray-700">Guides</div>
               <div className="max-h-64 overflow-auto">
@@ -1023,7 +990,7 @@ export default function App() {
                       <th className="px-3 py-2 text-left">Type</th>
                       <th className="px-3 py-2 text-right">Guide</th>
                       <th className="px-3 py-2 text-left">Series</th>
-                      <th className="px-3 py-2 text-right">Value</th>
+                      <th className="px-3 py-2 text-right">{/* 값 라벨 */}Value</th>
                     </tr>
                   </thead>
                   <tbody>
