@@ -3,11 +3,11 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Log-scale Graph Digitizer — single file
- * v4.2
- * - fix: custom-anchor 모드에서 이미지 드래그/이동 불가 → offX/offY 적용
- * - UI: Magnifier 위치 이동(Series 헤더), Guides를 Series 끝으로 이동
- * - UI: 우측(하단) 좌표 패널 추가(Points / Guides 별도 표)
- * - 헤더에 Undo Last Point / Clear Active Series 배치
+ * v4.3
+ * - 이미지 커스텀 앵커 모드에서도 드래그/오프셋 정상 반영
+ * - Guides: 입력 원문(라벨) 보존/표시
+ * - Points: 시리즈별 정렬(A→B), 각 시리즈 내부 x 오름차순
+ * - Guides 표 폭/줄바꿈 개선(table-fixed, w-*, whitespace-nowrap, overflow-x-auto)
  */
 
 type Pt = { x: number; y: number };
@@ -62,7 +62,7 @@ export default function App() {
   const [ptRadius, setPtRadius] = useState(5);
   const [showPoints, setShowPoints] = useState(true);
 
-  // Magnifier → Series 헤더 옆으로 이동 (UI만 이동, 상태는 동일)
+  // Magnifier → Series 헤더 옆
   const [magnifyOn, setMagnifyOn] = useState(false);
   const [magnifyFactor, setMagnifyFactor] = useState(3);
 
@@ -83,13 +83,17 @@ export default function App() {
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" } | null>(null);
   const [tick, setTick] = useState(0);
 
-  // Guides (→ Series 끝으로 UI 이동)
+  /* ==== Guides (UI는 Series 끝으로) ==== */
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [guideInput, setGuideInput] = useState("");
   const [guideYs, setGuideYs] = useState<number[]>([]);
   const [guideYInput, setGuideYInput] = useState("");
   const [showCrossFromX, setShowCrossFromX] = useState(true);
   const [showCrossFromY, setShowCrossFromY] = useState(true);
+
+  // 라벨(입력 원문) 보존용 맵
+  const [guideXLabels, setGuideXLabels] = useState<Record<number, string>>({});
+  const [guideYLabels, setGuideYLabels] = useState<Record<number, string>>({});
 
   /* ==== Undo / Redo ==== */
   const [history, setHistory] = useState<AppState[]>([]);
@@ -122,8 +126,7 @@ export default function App() {
       ],
       customAnchors: [null, null],
     };
-    setHistory([init]);
-    setHistoryIndex(0);
+    setHistory([init]); setHistoryIndex(0);
   }, []);
 
   /* ==== 유틸 ==== */
@@ -133,10 +136,7 @@ export default function App() {
     (notify as any)._t = window.setTimeout(() => setToast(null), 1500);
   };
 
-  const innerRect = () => ({
-    x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom
-  });
-
+  const innerRect = () => ({ x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom });
   const clampS = (v: number) => Math.max(0.05, Math.min(50, v));
   const EPS = 1e-12;
   const tVal = (v: number, log: boolean) => (log ? Math.log10(Math.max(EPS, v)) : v);
@@ -155,7 +155,6 @@ export default function App() {
       py: r.y + r.h - ((ty - mm.ymin) / (mm.ymax - mm.ymin)) * r.h,
     };
   };
-
   const pixelToData = (px: number, py: number) => {
     const r = innerRect(), mm = tMinMax();
     const tx = mm.xmin + ((px - r.x) / r.w) * (mm.xmax - mm.xmin);
@@ -163,7 +162,6 @@ export default function App() {
     const inv = (tv: number, log: boolean) => (log ? Math.pow(10, tv) : tv);
     return { x: inv(tx, currentState.xLog), y: inv(ty, currentState.yLog) };
   };
-
   const fmtReal = (v: number | null) => {
     if (v == null || !isFinite(v)) return "-";
     const a = Math.abs(v);
@@ -180,17 +178,16 @@ export default function App() {
     return { x, y, w, h };
   };
 
-  // ★ 핵심 수정: custom 모드에서도 offX/offY 적용 → 이미지 드래그/이동 정상 동작
+  // custom 모드에서도 offX/offY 적용 → 드래그 이동 정상
   const drawRectAndAnchor = (idx: 0 | 1) => {
     const base = baseRect(idx), xf = currentState.bgXform[idx], CA = currentState.customAnchors[idx];
     const dw = base.w * clampS(xf.sx), dh = base.h * clampS(xf.sy);
     let ax: number, ay: number, fx: number, fy: number;
-
     if (anchorMode === "custom") {
       const dax = CA ? CA.ax : base.x;
       const day = CA ? CA.ay : base.y + base.h;
-      ax = dax;               // ← 앵커가 있을 땐 오프셋 무시 (고정)
-      ay = day;
+      ax = dax + xf.offX;  // offX/ offY 반영
+      ay = day + xf.offY;
       fx = CA ? CA.fx : 0;
       fy = CA ? CA.fy : 1;
     } else {
@@ -280,7 +277,7 @@ export default function App() {
   }, [selectedPoint, bgEditMode, activeBg, currentState]);
 
   /* ==== 커서 매핑 ==== */
-  function cursorForHandle(handle: Handle, bgEdit: boolean, picking: boolean) {
+  const cursorForHandle = (handle: Handle, bgEdit: boolean, picking: boolean) => {
     if (picking) return "crosshair";
     if (!bgEdit) return "crosshair";
     switch (handle) {
@@ -295,9 +292,9 @@ export default function App() {
       default:
         return "move";
     }
-  }
+  };
 
-  /* ==== 그리드, 패스 등 ==== */
+  /* ==== 그리드/보간 ==== */
   const SUPMAP: Record<string, string> = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "-": "⁻", "+": "⁺", ".": "." };
   const sup = (s: number | string) => String(s).split("").map(ch => SUPMAP[ch] ?? ch).join("");
   const pow10Label = (n: number) => `10${sup(n)}`;
@@ -454,7 +451,7 @@ export default function App() {
     ctx.fillStyle = "#fff"; ctx.fillRect(r.x, r.y, r.w, r.h);
     lastRectRef.current = null;
 
-    // Images
+    // Background images
     for (let i = 0 as 0 | 1; i <= 1; i = ((i + 1) as 0 | 1)) {
       const img = bgRefs.current[i]; if (!img || !showAB[i] || opacityAB[i] <= 0) continue;
       const { dx, dy, dw, dh, ax, ay } = drawRectAndAnchor(i);
@@ -488,13 +485,13 @@ export default function App() {
 
     drawGrid(ctx);
 
-    // Guides X
+    // Guide X lines
     if (guideXs.length) {
       const rr = innerRect(); ctx.save(); ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
       for (const gx of guideXs) {
         const gp = dataToPixel(gx, 1); ctx.strokeStyle = "#EF4444";
         ctx.beginPath(); ctx.moveTo(gp.px, rr.y); ctx.lineTo(gp.px, rr.y + rr.h); ctx.stroke();
-        series.forEach((s) => {
+        currentState.series.forEach((s) => {
           const y = yAtX(s.points, gx); if (y == null) return;
           const P = dataToPixel(gx, y);
           if (showCrossFromX) { ctx.strokeStyle = "rgba(239,68,68,0.5)"; ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); }
@@ -504,13 +501,13 @@ export default function App() {
       ctx.restore();
     }
 
-    // Guides Y
+    // Guide Y lines
     if (guideYs.length) {
       const rr = innerRect(); ctx.save(); ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
       for (const gy of guideYs) {
         const gp = dataToPixel(1, gy); ctx.strokeStyle = "#3B82F6";
         ctx.beginPath(); ctx.moveTo(rr.x, gp.py); ctx.lineTo(rr.x + rr.w, gp.py); ctx.stroke();
-        series.forEach((s) => {
+        currentState.series.forEach((s) => {
           const x = xAtY(s.points, gy); if (x == null) return;
           const P = dataToPixel(x, gy);
           if (showCrossFromY) { ctx.strokeStyle = "rgba(59,130,246,0.5)"; ctx.beginPath(); ctx.moveTo(P.px, rr.y); ctx.lineTo(P.px, rr.y + rr.h); ctx.stroke(); }
@@ -524,7 +521,7 @@ export default function App() {
     if (connectLines) {
       const rr = innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x, rr.y, rr.w, rr.h); ctx.clip();
       ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
-      for (const s of series) {
+      for (const s of currentState.series) {
         if (s.points.length < 2) continue; const pxPts = s.points.map(p => dataToPixel(p.x, p.y));
         ctx.strokeStyle = s.color; ctx.beginPath();
         if (smoothLines && pxPts.length >= 2) catmullRomPath(ctx, pxPts, smoothAlpha);
@@ -537,14 +534,13 @@ export default function App() {
     // Points
     if (showPoints) {
       currentState.series.forEach((s, si) => {
-        const activeStroke = "#2563EB";
         ctx.fillStyle = s.color; ctx.strokeStyle = "#fff";
         s.points.forEach((p, pi) => {
           const P = dataToPixel(p.x, p.y);
           ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI * 2); ctx.fill();
           if (ptRadius >= 3) { ctx.lineWidth = 1; ctx.stroke(); }
           if (selectedPoint?.seriesIndex === si && selectedPoint?.pointIndex === pi) {
-            ctx.strokeStyle = activeStroke; ctx.lineWidth = 2.5;
+            ctx.strokeStyle = "#2563EB"; ctx.lineWidth = 2.5;
             ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius + 3, 0, Math.PI * 2); ctx.stroke();
           }
         });
@@ -590,11 +586,8 @@ export default function App() {
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e);
     const rr = innerRect();
-    if (px >= rr.x && px <= rr.x + rr.w && py >= rr.y && py <= rr.y + rr.h) {
-      hoverRef.current = pixelToData(px, py);
-    } else {
-      hoverRef.current = { x: null, y: null };
-    }
+    if (px >= rr.x && px <= rr.x + rr.w && py >= rr.y && py <= rr.y + rr.h) hoverRef.current = pixelToData(px, py);
+    else hoverRef.current = { x: null, y: null };
 
     if (resizeRef.current.active && bgEditMode) {
       const { fx, fy, ax, ay, baseW, baseH, mode } = resizeRef.current;
@@ -730,9 +723,7 @@ export default function App() {
 
       updateState(() => next, true);
       notify("Preset loaded");
-    } catch {
-      notify("Invalid preset", "err");
-    }
+    } catch { notify("Invalid preset", "err"); }
   };
 
   const savePresetFile = () => {
@@ -740,7 +731,6 @@ export default function App() {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `digitizer_preset_${Date.now()}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 0);
   };
-
   const loadPresetFromFile = (file: File | null) => {
     if (!file) return;
     const fr = new FileReader();
@@ -750,13 +740,11 @@ export default function App() {
     };
     fr.readAsText(file);
   };
-
   const copyShareURL = () => {
     const payload = btoa(unescape(encodeURIComponent(JSON.stringify(serialize()))));
     const url = `${location.origin}${location.pathname}#s=${payload}`;
     navigator.clipboard.writeText(url).then(() => notify("URL copied"));
   };
-
   const exportCSV = () => {
     let out = "series,x,y\n";
     currentState.series.forEach(s => s.points.forEach(p => (out += `${s.name},${p.x},${p.y}\n`)));
@@ -769,7 +757,7 @@ export default function App() {
     const a = document.createElement("a"); a.href = url; a.download = `digitizer_${Date.now()}.png`; a.click();
   };
 
-  // URL/Local 자동 로드
+  // URL/Local 자동 로드/저장
   useEffect(() => {
     const h = location.hash || "";
     if (h.startsWith("#s=")) {
@@ -787,20 +775,21 @@ export default function App() {
   if (!currentState) return <div className="flex h-screen items-center justify-center">Loading...</div>;
 
   /* ======= 좌표 패널 데이터 ======= */
+  // 시리즈별 정렬(A→B), 각 시리즈 내부 x 오름차순
   const pointRows = currentState.series
-  .flatMap((s, si) => s.points.map((p) => ({ seriesIndex: si, series: s.name, x: p.x, y: p.y })))
-  .sort((a, b) => (a.seriesIndex - b.seriesIndex) || (a.x - b.x));
+    .map(s => ({ name: s.name, rows: [...s.points].sort((a, b) => a.x - b.x) }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap(s => s.rows.map(p => ({ series: s.name, x: p.x, y: p.y })));
 
-    const guideRows: Array<{ kind: "X" | "Y"; guide: number; series: string; value: number | null }> = [];
+  // Guides 표: 입력 라벨 그대로 노출
+  const guideRows: Array<{ kind: "X" | "Y"; guide: number; guideLabel: string; series: string; value: number | null }> = [];
   for (const gx of guideXs) {
-    currentState.series.forEach(s =>
-      guideRows.push({ kind: "X", guide: gx, series: s.name, value: yAtX(s.points, gx) })
-    );
+    const label = guideXLabels[gx] ?? fmtReal(gx);
+    currentState.series.forEach(s => guideRows.push({ kind: "X", guide: gx, guideLabel: label, series: s.name, value: yAtX(s.points, gx) }));
   }
   for (const gy of guideYs) {
-    currentState.series.forEach(s =>
-      guideRows.push({ kind: "Y", guide: gy, series: s.name, value: xAtY(s.points, gy) })
-    );
+    const label = guideYLabels[gy] ?? fmtReal(gy);
+    currentState.series.forEach(s => guideRows.push({ kind: "Y", guide: gy, guideLabel: label, series: s.name, value: xAtY(s.points, gy) }));
   }
 
   return (
@@ -809,7 +798,6 @@ export default function App() {
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/80 p-4 backdrop-blur-sm">
         <h1 className="text-xl font-bold text-gray-900">Log-scale Graph Digitizer</h1>
         <div className="flex flex-wrap items-center gap-3 text-base">
-          {/* ★ 최상단으로 이동한 버튼 */}
           <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:s.points.slice(0,-1)}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300">Undo Last Point</button>
           <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:[]}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active Series</button>
 
@@ -877,7 +865,6 @@ export default function App() {
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-xl font-bold text-gray-800">Series & Points</h3>
-              {/* ★ Magnifier를 여기로 이동 */}
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} />
                 Magnifier
@@ -906,23 +893,77 @@ export default function App() {
                 <label className="col-span-2 flex items-center gap-3">Size <input type="range" className="w-full" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} /></label>
               </div>
 
-              {/* ★ Guides UI → Series 마지막으로 이동 */}
+              {/* Guides (Series 끝) */}
               <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
                 <div className="flex items-center justify-between">
                   <h4 className="font-semibold text-gray-600">Guides</h4>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-6 font-semibold text-gray-600">X</span>
-                  <input className="flex-grow rounded-md border px-3 py-2" placeholder="e.g., 1000" value={guideInput} onChange={(e)=>setGuideInput(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter"){const v=Number(guideInput); if(isFinite(v)&&v>0) setGuideXs(g=>Array.from(new Set([...g,v])));}}}/>
-                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{const v=Number(guideInput); if(isFinite(v)&&v>0) setGuideXs(g=>Array.from(new Set([...g,v])));}}>Add</button>
-                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>setGuideXs([])}>Clear</button>
+                  <input
+                    className="flex-grow rounded-md border px-3 py-2"
+                    placeholder="e.g., 1,000"
+                    value={guideInput}
+                    onChange={(e)=>setGuideInput(e.target.value)}
+                    onKeyDown={(e)=>{
+                      if(e.key==="Enter"){
+                        const raw = e.currentTarget.value.trim();
+                        const n = Number(raw.replace(/,/g,""));
+                        if(isFinite(n) && n>0){
+                          setGuideXs(g=>Array.from(new Set([...g,n])));
+                          setGuideXLabels(m=>({ ...m, [n]: raw })); // 라벨 보존
+                          setGuideInput("");
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300"
+                    onClick={()=>{
+                      const raw = guideInput.trim();
+                      const n = Number(raw.replace(/,/g,""));
+                      if(isFinite(n) && n>0){
+                        setGuideXs(g=>Array.from(new Set([...g,n])));
+                        setGuideXLabels(m=>({ ...m, [n]: raw }));
+                        setGuideInput("");
+                      }
+                    }}
+                  >Add</button>
+                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{setGuideXs([]); setGuideXLabels({});}}>Clear</button>
                   <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromX} onChange={(e)=>setShowCrossFromX(e.target.checked)} /> Cross</label>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-6 font-semibold text-gray-600">Y</span>
-                  <input className="flex-grow rounded-md border px-3 py-2" placeholder="e.g., 10" value={guideYInput} onChange={(e)=>setGuideYInput(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter"){const v=Number(guideYInput); if(isFinite(v)&&v>0) setGuideYs(g=>Array.from(new Set([...g,v])));}}}/>
-                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{const v=Number(guideYInput); if(isFinite(v)&&v>0) setGuideYs(g=>Array.from(new Set([...g,v])));}}>Add</button>
-                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>setGuideYs([])}>Clear</button>
+                  <input
+                    className="flex-grow rounded-md border px-3 py-2"
+                    placeholder="e.g., 10"
+                    value={guideYInput}
+                    onChange={(e)=>setGuideYInput(e.target.value)}
+                    onKeyDown={(e)=>{
+                      if(e.key==="Enter"){
+                        const raw = e.currentTarget.value.trim();
+                        const n = Number(raw.replace(/,/g,""));
+                        if(isFinite(n) && n>0){
+                          setGuideYs(g=>Array.from(new Set([...g,n])));
+                          setGuideYLabels(m=>({ ...m, [n]: raw }));
+                          setGuideYInput("");
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300"
+                    onClick={()=>{
+                      const raw = guideYInput.trim();
+                      const n = Number(raw.replace(/,/g,""));
+                      if(isFinite(n) && n>0){
+                        setGuideYs(g=>Array.from(new Set([...g,n])));
+                        setGuideYLabels(m=>({ ...m, [n]: raw }));
+                        setGuideYInput("");
+                      }
+                    }}
+                  >Add</button>
+                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{setGuideYs([]); setGuideYLabels({});}}>Clear</button>
                   <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross</label>
                 </div>
               </div>
@@ -955,20 +996,18 @@ export default function App() {
             />
           </div>
 
-          {/* ★ 좌표 패널 (캔버스 하단) */}
+          {/* 좌표 패널 */}
           <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* Points Table */}
             <div className="rounded-lg border border-gray-200">
               <div className="border-b px-4 py-2 font-semibold text-gray-700">Points</div>
               <div className="max-h-64 overflow-auto">
                 <table className="min-w-full text-sm">
-                  <table className="min-w-full text-sm table-fixed">
                   <thead className="sticky top-0 bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-left w-28">Type</th>
-                      <th className="px-3 py-2 text-right w-40">Guide</th>   {/* ← 폭 늘림 */}
-                      <th className="px-3 py-2 text-left w-40">Series</th>
-                      <th className="px-3 py-2 text-right w-36">Value</th>
+                      <th className="px-3 py-2 text-left">Series</th>
+                      <th className="px-3 py-2 text-right">X</th>
+                      <th className="px-3 py-2 text-right">Y</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -977,8 +1016,8 @@ export default function App() {
                     ) : pointRows.map((r, i) => (
                       <tr key={i} className="odd:bg-white even:bg-gray-50">
                         <td className="px-3 py-1">{r.series}</td>
-                        <td className="px-3 py-1 text-right font-mono">{fmtReal(r.x)}</td>
-                        <td className="px-3 py-1 text-right font-mono">{fmtReal(r.y)}</td>
+                        <td className="px-3 py-1 text-right font-mono whitespace-nowrap">{fmtReal(r.x)}</td>
+                        <td className="px-3 py-1 text-right font-mono whitespace-nowrap">{fmtReal(r.y)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -989,14 +1028,14 @@ export default function App() {
             {/* Guides Table */}
             <div className="rounded-lg border border-gray-200">
               <div className="border-b px-4 py-2 font-semibold text-gray-700">Guides</div>
-              <div className="max-h-64 overflow-auto">
-                <table className="min-w-full text-sm">
+              <div className="max-h-64 overflow-auto overflow-x-auto">
+                <table className="min-w-full text-sm table-fixed">
                   <thead className="sticky top-0 bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-left">Type</th>
-                      <th className="px-3 py-2 text-right">Guide</th>
-                      <th className="px-3 py-2 text-left">Series</th>
-                      <th className="px-3 py-2 text-right">{/* 값 라벨 */}Value</th>
+                      <th className="px-3 py-2 text-left w-28">Type</th>
+                      <th className="px-3 py-2 text-right w-40">Guide</th>
+                      <th className="px-3 py-2 text-left w-40">Series</th>
+                      <th className="px-3 py-2 text-right w-36">Value</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1004,9 +1043,9 @@ export default function App() {
                       <tr><td className="px-3 py-2 text-gray-400" colSpan={4}>No guides</td></tr>
                     ) : guideRows.map((g, i) => (
                       <tr key={i} className="odd:bg-white even:bg-gray-50">
-                       <td className="px-3 py-1 w-28">{g.kind === "X" ? "X-guide → y" : "Y-guide → x"}</td>
-                       <td className="px-3 py-1 text-right font-mono w-40 whitespace-nowrap">
-                          {g.guideLabel}   {/* ← 입력 원문 그대로 표시 */}
+                        <td className="px-3 py-1 w-28">{g.kind === "X" ? "X-guide → y" : "Y-guide → x"}</td>
+                        <td className="px-3 py-1 text-right font-mono w-40 whitespace-nowrap">
+                          {g.guideLabel}   {/* 입력 원문 그대로 */}
                         </td>
                         <td className="px-3 py-1 w-40">{g.series}</td>
                         <td className="px-3 py-1 text-right font-mono w-36 whitespace-nowrap">
