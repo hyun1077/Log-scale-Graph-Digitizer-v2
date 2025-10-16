@@ -3,15 +3,13 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Log-scale Graph Digitizer — single file
- * 변경 사항:
- *  - "Background A/B" → "Image A/B"
- *  - Series A/B 이름 텍스트 입력 지원
- *  - Smooth curve 강도(smoothAlpha) 슬라이더 추가
- *  - 레전드(Series 이름) 더 큼/왼쪽정렬/마커와 겹치지 않게
- *  - 커서 교점: X/Y 모두 실제값(비로그) 표시 + At X / At Y
- *  - 가이드(Guide X): X값 세로선과 시리즈 교점 표시, 입력 옆 결과 실시간, [Add][Clear][Add from Cursor] 버튼
- *  - Save to Local / Load from Local 버튼 제거(자동 저장은 유지)
- *  - 앵커 기본값: custom 모드, 커스텀 없으면 좌하(왼쪽-하단) 기준
+ * 업데이트:
+ *  - Guide X에 더해 Guide Y(가로선) 추가: [Add] [Clear] [Add from Cursor]
+ *  - 두 가이드 모두 모든 시리즈와의 교점 포인트/라벨 표시
+ *  - 커서/가이드 라벨 등 모든 좌표값을 "실수값(비로그)"로 표시
+ *  - Series 이름 입력, Smooth 강도, Image A/B(이전 요청 반영)
+ *  - Save to/Load from Local 버튼 제거(자동 저장만 유지)
+ *  - 기본 앵커: custom(없으면 좌하 기준)
  */
 
 type Pt = { x: number; y: number };
@@ -87,10 +85,14 @@ export default function App() {
     (notify as any)._t = window.setTimeout(() => setToast(null), 1600);
   };
 
-  // Guides: X 값 목록 + 입력 상태
+  // Guides: X/Y 값 목록 + 입력 상태
   const [guideXs, setGuideXs] = useState<number[]>([]);
-  const [guideInput, setGuideInput] = useState<string>(""); // 입력 박스
-  const [inlineX, setInlineX] = useState<number | null>(null); // 입력 옆 표시용
+  const [guideInput, setGuideInput] = useState<string>("");
+  const [inlineX, setInlineX] = useState<number | null>(null);
+
+  const [guideYs, setGuideYs] = useState<number[]>([]);
+  const [guideYInput, setGuideYInput] = useState<string>("");
+  const [inlineY, setInlineY] = useState<number | null>(null);
 
   /* ==== Math / Util ==== */
   const innerRect = () => ({ x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom });
@@ -135,7 +137,7 @@ export default function App() {
     return { dx, dy, dw, dh, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
   };
 
-  /* ==== Guide 계산: y(x), x(y) ==== */
+  /* ==== Guide 보간: y(x), x(y) ==== */
   function yAtX(seriesPts: Pt[], xTarget: number): number | null {
     if (!seriesPts || seriesPts.length < 2) return null;
     const tx = (x: number) => tVal(x, xLog);
@@ -172,12 +174,13 @@ export default function App() {
     }
     return null;
   }
-  function fmtReal(v: number | null): string {
+  const fmtReal = (v: number | null) => {
     if (v === null || !isFinite(v)) return "-";
-    const s = Math.abs(v) >= 1e6 || Math.abs(v) < 1e-4 ? v.toPrecision(6) : v.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    const a = Math.abs(v);
+    const s = a >= 1e6 || a < 1e-4 ? v.toPrecision(6) : v.toLocaleString(undefined, { maximumFractionDigits: 6 });
     return s.replace(/\.?0+$/,'');
-  }
-  function inlineLabelForX(x: number): string {
+  };
+  const inlineLabelForX = (x: number) => {
     if (!isFinite(x) || x <= 0) return "";
     const parts: string[] = [];
     for (const s of series) {
@@ -186,7 +189,17 @@ export default function App() {
       parts.push(`${s.name}: y=${fmtReal(y)}`);
     }
     return parts.length ? parts.join("  |  ") : "(교점 없음)";
-  }
+  };
+  const inlineLabelForY = (y: number) => {
+    if (!isFinite(y) || y <= 0) return "";
+    const parts: string[] = [];
+    for (const s of series) {
+      const x = xAtY(s.points, y);
+      if (x === null || !isFinite(x)) continue;
+      parts.push(`${s.name}: x=${fmtReal(x)}`);
+    }
+    return parts.length ? parts.join("  |  ") : "(교점 없음)";
+  };
 
   /* ==== Image Load ==== */
   const setImgError = (idx: 0 | 1, msg: string) => setLoadError((e) => { const n = [...e] as [string|null,string|null]; n[idx] = msg; return n; });
@@ -261,13 +274,13 @@ export default function App() {
 
       drawGrid(ctx);
 
-      // === Guide vertical lines & intersections ===
+      // === Guide X(세로)선 & 교점 ===
       if (guideXs.length) {
         const rr = innerRect();
         ctx.save();
         ctx.setLineDash([6, 4]);
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = "#EF4444";
+        ctx.strokeStyle = "#EF4444"; // red
         ctx.fillStyle = "#EF4444";
         for (const gx of guideXs) {
           const gp = dataToPixel(gx, 1);
@@ -288,6 +301,39 @@ export default function App() {
             ctx.textAlign = "left";
             ctx.textBaseline = "bottom";
             ctx.fillText(`${s.name}: y=${fmtReal(y)}`, P.px + 6, P.py - 2);
+            ctx.restore();
+          });
+        }
+        ctx.restore();
+      }
+
+      // === Guide Y(가로)선 & 교점 ===
+      if (guideYs.length) {
+        const rr = innerRect();
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "#3B82F6"; // blue
+        ctx.fillStyle = "#3B82F6";
+        for (const gy of guideYs) {
+          const gp = dataToPixel(1, gy);
+          ctx.beginPath();
+          ctx.moveTo(rr.x, gp.py);
+          ctx.lineTo(rr.x + rr.w, gp.py);
+          ctx.stroke();
+          series.forEach((s) => {
+            const x = xAtY(s.points, gy);
+            if (x === null || !isFinite(x)) return;
+            const P = dataToPixel(x, gy);
+            ctx.beginPath();
+            ctx.arc(P.px, P.py, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.save();
+            ctx.font = "11px ui-sans-serif, system-ui";
+            ctx.fillStyle = "#0f172a";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "top";
+            ctx.fillText(`${s.name}: x=${fmtReal(x)}`, P.px + 6, P.py + 2);
             ctx.restore();
           });
         }
@@ -331,7 +377,7 @@ export default function App() {
          }
        }
 
-      // Hover crosshair (X/Y 모두) + 표시값은 실제값
+      // Hover crosshair (실수값 표기)
       if (hoverRef.current.x !== null && hoverRef.current.y !== null) {
         const P = dataToPixel(hoverRef.current.x, hoverRef.current.y), rr = innerRect();
         ctx.save(); ctx.strokeStyle = "#94a3b8"; ctx.setLineDash([4,3]);
@@ -339,7 +385,7 @@ export default function App() {
         ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); ctx.restore(); drawCross(ctx, P.px, P.py, 7);
       }
 
-      // Axis box + labels
+      // Axis frame + labels
       ctx.strokeStyle = "#374151"; ctx.lineWidth = 1.2; ctx.strokeRect(r.x, r.y, r.w, r.h);
       ctx.fillStyle = "#111827"; ctx.font = "14px ui-sans-serif, system-ui"; ctx.textAlign = "center"; ctx.fillText(xLog?"X (10^n)":"X", r.x + r.w/2, r.y + r.h + 34);
       ctx.save(); ctx.translate(r.x-45, r.y + r.h/2); ctx.rotate(-Math.PI/2); ctx.fillText(yLog?"Y (10^n)":"Y", 0, 0); ctx.restore();
@@ -354,7 +400,7 @@ export default function App() {
         ctx.beginPath(); ctx.moveTo(size.w - sz - 16 + sz/2, 16); ctx.lineTo(size.w - sz - 16 + sz/2, 16+sz); ctx.moveTo(size.w - sz - 16, 16+sz/2); ctx.lineTo(size.w - 16, 16+sz/2); ctx.stroke(); ctx.restore();
       }
 
-      // Legend — bigger, left-aligned, avoid overlap
+      // Legend — 좌측정렬 & 크게
       ctx.save();
       const rr2 = innerRect();
       ctx.font = "600 16px ui-sans-serif, system-ui";
@@ -385,7 +431,7 @@ export default function App() {
        ptRadius, showPoints,
        magnifyOn, magnifyFactor,
        activeSeries,
-       guideXs,
+       guideXs, guideYs,
        tick
       ]);
 
@@ -407,7 +453,7 @@ export default function App() {
   }
   function numFmt(v:number, step?:number){ if(!isFinite(v)) return ""; const abs=Math.abs(v); if(abs===0) return "0"; const d = step!==undefined? Math.max(0, Math.min(6, -Math.floor(Math.log10(Math.max(1e-12, step))))) : Math.max(0, Math.min(6, 3 - Math.floor(Math.log10(Math.max(1e-12, abs))))); if(abs>=1e5||abs<1e-3) return v.toExponential(2); return v.toFixed(d); }
 
-  // pretty label: 10^n
+  // pretty label: 10^n (축 눈금은 유지)
   const SUPMAP: Record<string,string> = {"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","-":"⁻","+":"⁺",".":"."};
   function supify(exp:number|string){ const s=String(exp); return s.split("").map(ch=> SUPMAP[ch] ?? ch).join(""); }
   function pow10LabelInt(n:number){ return `10${supify(n)}`; }
@@ -481,24 +527,64 @@ export default function App() {
     setTick(t => (t + 1) & 0xffff);
   };
 
-  const serialize = ():PresetV1 => ({ v:1, size, pad, axes:{xMin,xMax,yMin,yMax,xLog,yLog}, series, ui:{activeSeries}, connect:{connectLines, lineWidth, lineAlpha, smoothLines, smoothAlpha}, bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform }, images: bgUrls.current, guides: guideXs });
-  const applyPreset = (p:any) => { try { if(!p) return; p.size&&setSize(p.size); p.pad&&setPad(p.pad); if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); } Array.isArray(p.series)&&setSeries(p.series); p.ui&&setActiveSeries(p.ui.activeSeries??0); if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9); setSmoothLines(!!p.connect.smoothLines); if(typeof p.connect.smoothAlpha==="number") setSmoothAlpha(p.connect.smoothAlpha);} if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);} if(Array.isArray(p.images)){ p.images.forEach((src:string|null,idx:number)=>{ if(!src) return; const i = new Image(); i.crossOrigin = "anonymous"; i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); }; i.src = src; }); } if(Array.isArray(p.guides)) setGuideXs(p.guides.filter((v:any)=> isFinite(v) && v>0)); } catch(e){ console.warn("preset apply fail", e);} };
+  const serialize = ():PresetV1 => ({
+    v:1, size, pad,
+    axes:{xMin,xMax,yMin,yMax,xLog,yLog},
+    series,
+    ui:{activeSeries},
+    connect:{connectLines, lineWidth, lineAlpha, smoothLines, smoothAlpha},
+    bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform },
+    images: bgUrls.current,
+    guidesX: guideXs,
+    guidesY: guideYs
+  });
+  const applyPreset = (p:any) => { try {
+    if(!p) return;
+    p.size&&setSize(p.size); p.pad&&setPad(p.pad);
+    if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); }
+    Array.isArray(p.series)&&setSeries(p.series);
+    p.ui&&setActiveSeries(p.ui.activeSeries??0);
+    if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9); setSmoothLines(!!p.connect.smoothLines); if(typeof p.connect.smoothAlpha==="number") setSmoothAlpha(p.connect.smoothAlpha); }
+    if(p.bg){
+      setKeepAspect(!!p.bg.keepAspect);
+      p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode);
+      Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors);
+      typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg);
+      Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB);
+      Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB);
+      Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);
+    }
+    if(Array.isArray(p.images)){
+      p.images.forEach((src:string|null,idx:number)=>{
+        if(!src) return; const i = new Image(); i.crossOrigin = "anonymous";
+        i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); };
+        i.src = src;
+      });
+    }
+    if(Array.isArray(p.guidesX)) setGuideXs(p.guidesX.filter((v:any)=> isFinite(v) && v>0));
+    if(Array.isArray(p.guidesY)) setGuideYs(p.guidesY.filter((v:any)=> isFinite(v) && v>0));
+  } catch(e){ console.warn("preset apply fail", e);} };
+
   const savePresetFile = async () => {
     const data = JSON.stringify(serialize(), null, 2);
-    try { if (typeof (window as any).showSaveFilePicker === "function") { const handle = await (window as any).showSaveFilePicker({ suggestedName:`digitizer_preset_${Date.now()}.json`, types:[{description:"JSON", accept:{"application/json":[".json"]}}] }); const w = await handle.createWritable(); await w.write(new Blob([data],{type:"application/json"})); await w.close(); notify("Preset saved as file."); return; } } catch(err){ console.warn("picker fail; fallback", err); }
+    try { if (typeof (window as any).showSaveFilePicker === "function") {
+      const handle = await (window as any).showSaveFilePicker({ suggestedName:`digitizer_preset_${Date.now()}.json`, types:[{description:"JSON", accept:{"application/json":[".json"]}}] });
+      const w = await handle.createWritable(); await w.write(new Blob([data],{type:"application/json"})); await w.close(); notify("Preset saved as file."); return;
+    } } catch(err){ console.warn("picker fail; fallback", err); }
     try { const blob = new Blob([data],{type:"application/json"}); const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`digitizer_preset_${Date.now()}.json`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); notify("Download started."); } catch { notify("Download blocked", "err"); }
   };
   const loadPresetFromFile = (file: File | null) => { if(!file) return; const fr = new FileReader(); fr.onload = () => { try { applyPreset(JSON.parse(String(fr.result||"{}"))); notify("Preset loaded."); } catch { notify("Invalid preset", "err"); } }; fr.readAsText(file); };
   const copyShareURL = () => { try { const enc = btoa(unescape(encodeURIComponent(JSON.stringify(serialize())))); const url = `${location.origin}${location.pathname}#s=${enc}`; navigator.clipboard?.writeText(url); notify("Share URL copied!"); } catch { notify("Copy failed", "err"); } };
 
-  // 자동 저장(수동 Local 버튼은 제거)
-  useEffect(()=>{ try { localStorage.setItem("digitizer:auto", JSON.stringify(serialize())); } catch {} }, [size,pad,xMin,xMax,yMin,yMax,xLog,yLog,series,activeSeries,connectLines,lineWidth,lineAlpha,smoothLines,smoothAlpha,keepAspect,anchorMode,customAnchors,activeBg,showAB,opacityAB,bgXform,guideXs]);
+  // 자동 저장
+  useEffect(()=>{ try { localStorage.setItem("digitizer:auto", JSON.stringify(serialize())); } catch {} },
+    [size,pad,xMin,xMax,yMin,yMax,xLog,yLog,series,activeSeries,connectLines,lineWidth,lineAlpha,smoothLines,smoothAlpha,keepAspect,anchorMode,customAnchors,activeBg,showAB,opacityAB,bgXform,guideXs,guideYs]);
   useEffect(()=>{ const h=location.hash||""; if(h.startsWith("#s=")){ try{ applyPreset(JSON.parse(decodeURIComponent(escape(atob(h.slice(3)))))); return; }catch{} } try{ const raw=localStorage.getItem("digitizer:auto"); if(raw) applyPreset(JSON.parse(raw)); }catch{} }, []);
 
   /* ==== Simple internal tests ==== */
   useEffect(()=>{ const ok=[clampS(0),clampS(0.05),clampS(0.5),clampS(1),clampS(5),clampS(100)]; if(!(ok[0]===0.05&&ok[1]===0.05&&ok[2]===0.5&&ok[3]===1&&ok[4]===5&&ok[5]===50)) console.warn("TEST FAIL clamp"); const r=innerRect(), mid={x:r.x+r.w/2,y:r.y+r.h/2}, back=pixelToData(mid.x,mid.y), fwd=dataToPixel(back.x,back.y), err=Math.hypot(fwd.px-mid.x,fwd.py-mid.y); if(err>1) console.warn("TEST WARN round-trip",err); }, [xLog,yLog,xMin,xMax,yMin,yMax,size,pad]);
 
-  /* ==== UI (원래 레이아웃 유지) ==== */
+  /* ==== UI (기존 레이아웃 유지) ==== */
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white p-6 text-gray-900">
       <h1 className="mb-3 text-3xl font-semibold tracking-tight">Log-scale Graph Digitizer</h1>
@@ -521,7 +607,7 @@ export default function App() {
         />
       </div>
 
-      {/* Hover & Toolbar + Guide 입력 줄 */}
+      {/* 상단 상태/툴바 */}
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-700">
         <div>
           {hoverRef.current.x !== null && hoverRef.current.y !== null ? (() => {
@@ -539,7 +625,6 @@ export default function App() {
             <span>Cursor: -</span>
           )}
         </div>
-
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:s.points.slice(0,Math.max(0,s.points.length-1)) }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Undo</button>
           <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:[] }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Clear</button>
@@ -555,23 +640,14 @@ export default function App() {
         </div>
       </div>
 
-      {/* Guide 입력/표시 줄 */}
+      {/* Guide X 줄 */}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-700">
         <span className="font-medium">Guide X:</span>
         <input
           placeholder="예: 1000"
           value={guideInput}
-          onChange={(e)=> {
-            setGuideInput(e.target.value);
-            const v = Number(e.target.value);
-            setInlineX(isFinite(v) && v>0 ? v : null);
-          }}
-          onKeyDown={(e)=> {
-            if (e.key === "Enter") {
-              const v = Number(guideInput);
-              if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); }
-            }
-          }}
+          onChange={(e)=> { setGuideInput(e.target.value); const v = Number(e.target.value); setInlineX(isFinite(v) && v>0 ? v : null); }}
+          onKeyDown={(e)=> { if (e.key === "Enter") { const v = Number(guideInput); if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); } } }}
           className="rounded border px-2 py-1 w-28"
         />
         <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
@@ -591,7 +667,34 @@ export default function App() {
         </span>
       </div>
 
-      {/* 하단 카드들 (Axes / Series / Image) */}
+      {/* Guide Y 줄 */}
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
+        <span className="font-medium">Guide Y:</span>
+        <input
+          placeholder="예: 10"
+          value={guideYInput}
+          onChange={(e)=> { setGuideYInput(e.target.value); const v = Number(e.target.value); setInlineY(isFinite(v) && v>0 ? v : null); }}
+          onKeyDown={(e)=> { if (e.key === "Enter") { const v = Number(guideYInput); if (isFinite(v) && v>0) { setGuideYs(g => Array.from(new Set([...g, v]))); setInlineY(v); } } }}
+          className="rounded border px-2 py-1 w-28"
+        />
+        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
+          onClick={()=>{ const v = Number(guideYInput); if (isFinite(v) && v>0) { setGuideYs(g => Array.from(new Set([...g, v]))); setInlineY(v); } }}>
+          Add
+        </button>
+        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
+          onClick={()=>{ setGuideYs([]); setInlineY(null); setGuideYInput(""); }}>
+          Clear
+        </button>
+        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
+          onClick={()=>{ if (hoverRef.current.y!==null){ const v=hoverRef.current.y!; setGuideYs(g=> Array.from(new Set([...g, v]))); setInlineY(v); setGuideYInput(String(v)); }}}>
+          Add from Cursor
+        </button>
+        <span className="text-gray-600">
+          {inlineY!==null ? <>Y=<b className="font-mono">{fmtReal(inlineY)}</b> → {inlineLabelForY(inlineY)}</> : <span className="text-gray-400">(값 입력 후 Enter/추가)</span>}
+        </span>
+      </div>
+
+      {/* 하단 카드들 */}
       <div className="mt-4 grid gap-5 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg md:grid-cols-2">
         <section>
           <h2 className="mb-2 font-semibold">Axes</h2>
