@@ -3,13 +3,11 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Log-scale Graph Digitizer — single file
- * 최종 개선 v4.1
- * - Undo/Redo
- * - 가이드 X/Y 교점 및 실수표시
- * - 배경 이미지 드래그/리사이즈(커서 변경), 방향키 이동
- * - 프리셋 저장/불러오기/URL복사
- * - CSV/PNG 내보내기
- * - 패널 순서: Axes → Image → Series
+ * v4.2
+ * - fix: custom-anchor 모드에서 이미지 드래그/이동 불가 → offX/offY 적용
+ * - UI: Magnifier 위치 이동(Series 헤더), Guides를 Series 끝으로 이동
+ * - UI: 우측(하단) 좌표 패널 추가(Points / Guides 별도 표)
+ * - 헤더에 Undo Last Point / Clear Active Series 배치
  */
 
 type Pt = { x: number; y: number };
@@ -64,6 +62,7 @@ export default function App() {
   const [ptRadius, setPtRadius] = useState(5);
   const [showPoints, setShowPoints] = useState(true);
 
+  // Magnifier → Series 헤더 옆으로 이동 (UI만 이동, 상태는 동일)
   const [magnifyOn, setMagnifyOn] = useState(false);
   const [magnifyFactor, setMagnifyFactor] = useState(3);
 
@@ -84,7 +83,7 @@ export default function App() {
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" } | null>(null);
   const [tick, setTick] = useState(0);
 
-  // Guides
+  // Guides (→ Series 끝으로 UI 이동)
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [guideInput, setGuideInput] = useState("");
   const [guideYs, setGuideYs] = useState<number[]>([]);
@@ -127,7 +126,7 @@ export default function App() {
     setHistoryIndex(0);
   }, []);
 
-  /* ==== 유틸 / 좌표변환 ==== */
+  /* ==== 유틸 ==== */
   const notify = (msg: string, kind: "ok" | "err" = "ok") => {
     setToast({ msg, kind });
     window.clearTimeout((notify as any)._t);
@@ -181,16 +180,23 @@ export default function App() {
     return { x, y, w, h };
   };
 
+  // ★ 핵심 수정: custom 모드에서도 offX/offY 적용 → 이미지 드래그/이동 정상 동작
   const drawRectAndAnchor = (idx: 0 | 1) => {
     const base = baseRect(idx), xf = currentState.bgXform[idx], CA = currentState.customAnchors[idx];
     const dw = base.w * clampS(xf.sx), dh = base.h * clampS(xf.sy);
     let ax: number, ay: number, fx: number, fy: number;
 
     if (anchorMode === "custom") {
-      if (CA) { ax = CA.ax; ay = CA.ay; fx = CA.fx; fy = CA.fy; }
-      else { ax = base.x; ay = base.y + base.h; fx = 0; fy = 1; }
+      const dax = CA ? CA.ax : base.x;
+      const day = CA ? CA.ay : base.y + base.h;
+      ax = dax + xf.offX;            // ← offX 적용
+      ay = day + xf.offY;            // ← offY 적용
+      fx = CA ? CA.fx : 0;
+      fy = CA ? CA.fy : 1;
     } else {
-      ax = base.x + base.w / 2 + xf.offX; ay = base.y + base.h / 2 + xf.offY; fx = 0.5; fy = 0.5;
+      ax = base.x + base.w / 2 + xf.offX;
+      ay = base.y + base.h / 2 + xf.offY;
+      fx = 0.5; fy = 0.5;
     }
     const dx = ax - fx * dw, dy = ay - fy * dh;
     return { dx, dy, dw, dh, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
@@ -273,7 +279,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedPoint, bgEditMode, activeBg, currentState]);
 
-  /* ==== 커서 매핑 헬퍼 ==== */
+  /* ==== 커서 매핑 ==== */
   function cursorForHandle(handle: Handle, bgEdit: boolean, picking: boolean) {
     if (picking) return "crosshair";
     if (!bgEdit) return "crosshair";
@@ -291,7 +297,7 @@ export default function App() {
     }
   }
 
-  /* ==== 그리드 & Path ==== */
+  /* ==== 그리드, 패스 등 ==== */
   const SUPMAP: Record<string, string> = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "-": "⁻", "+": "⁺", ".": "." };
   const sup = (s: number | string) => String(s).split("").map(ch => SUPMAP[ch] ?? ch).join("");
   const pow10Label = (n: number) => `10${sup(n)}`;
@@ -493,8 +499,6 @@ export default function App() {
           const P = dataToPixel(gx, y);
           if (showCrossFromX) { ctx.strokeStyle = "rgba(239,68,68,0.5)"; ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); }
           ctx.fillStyle = "#EF4444"; ctx.beginPath(); ctx.arc(P.px, P.py, 4, 0, Math.PI * 2); ctx.fill();
-          ctx.save(); ctx.font = "11px ui-sans-serif"; ctx.fillStyle = "#0f172a"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
-          ctx.fillText(`${s.name}: y=${fmtReal(y)}`, P.px + 6, P.py - 2); ctx.restore();
         });
       }
       ctx.restore();
@@ -511,8 +515,6 @@ export default function App() {
           const P = dataToPixel(x, gy);
           if (showCrossFromY) { ctx.strokeStyle = "rgba(59,130,246,0.5)"; ctx.beginPath(); ctx.moveTo(P.px, rr.y); ctx.lineTo(P.px, rr.y + rr.h); ctx.stroke(); }
           ctx.fillStyle = "#3B82F6"; ctx.beginPath(); ctx.arc(P.px, P.py, 4, 0, Math.PI * 2); ctx.fill();
-          ctx.save(); ctx.font = "11px ui-sans-serif"; ctx.fillStyle = "#0f172a"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-          ctx.fillText(`${s.name}: x=${fmtReal(x)}`, P.px + 6, P.py + 2); ctx.restore();
         });
       }
       ctx.restore();
@@ -535,13 +537,14 @@ export default function App() {
     // Points
     if (showPoints) {
       currentState.series.forEach((s, si) => {
+        const activeStroke = "#2563EB";
         ctx.fillStyle = s.color; ctx.strokeStyle = "#fff";
         s.points.forEach((p, pi) => {
           const P = dataToPixel(p.x, p.y);
           ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI * 2); ctx.fill();
           if (ptRadius >= 3) { ctx.lineWidth = 1; ctx.stroke(); }
           if (selectedPoint?.seriesIndex === si && selectedPoint?.pointIndex === pi) {
-            ctx.strokeStyle = "#2563EB"; ctx.lineWidth = 2.5;
+            ctx.strokeStyle = activeStroke; ctx.lineWidth = 2.5;
             ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius + 3, 0, Math.PI * 2); ctx.stroke();
           }
         });
@@ -583,7 +586,7 @@ export default function App() {
     guideXs, guideYs, showCrossFromX, showCrossFromY, magnifyOn, magnifyFactor, selectedPoint, tick
   ]);
 
-  /* ==== 마우스 핸들러 ==== */
+  /* ==== 마우스 ==== */
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e);
     const rr = innerRect();
@@ -663,7 +666,7 @@ export default function App() {
     }
 
     if (inPlot(px, py)) {
-      // 먼저 선택 검사
+      // 선택 검사
       for (let si = 0; si < currentState.series.length; si++) {
         for (let pi = 0; pi < currentState.series[si].points.length; pi++) {
           const p = currentState.series[si].points[pi];
@@ -754,7 +757,6 @@ export default function App() {
     navigator.clipboard.writeText(url).then(() => notify("URL copied"));
   };
 
-  /* ==== Header Buttons ==== */
   const exportCSV = () => {
     let out = "series,x,y\n";
     currentState.series.forEach(s => s.points.forEach(p => (out += `${s.name},${p.x},${p.y}\n`)));
@@ -767,7 +769,7 @@ export default function App() {
     const a = document.createElement("a"); a.href = url; a.download = `digitizer_${Date.now()}.png`; a.click();
   };
 
-  /* ==== Auto-load from URL/local ==== */
+  // URL/Local 자동 로드
   useEffect(() => {
     const h = location.hash || "";
     if (h.startsWith("#s=")) {
@@ -784,12 +786,30 @@ export default function App() {
 
   if (!currentState) return <div className="flex h-screen items-center justify-center">Loading...</div>;
 
+  /* ======= 좌표 패널 데이터 ======= */
+  const pointRows = currentState.series
+    .flatMap((s) => s.points.map((p) => ({ series: s.name, x: p.x, y: p.y })))
+    .sort((a, b) => a.x - b.x);
+
+  const guideRows: Array<{ kind: "X" | "Y"; guide: number; series: string; value: number | null }> = [];
+  for (const gx of guideXs) {
+    currentState.series.forEach(s => guideRows.push({ kind: "X", guide: gx, series: s.name, value: yAtX(s.points, gx) }));
+  }
+  for (const gy of guideYs) {
+    currentState.series.forEach(s => guideRows.push({ kind: "Y", guide: gy, series: s.name, value: xAtY(s.points, gy) }));
+  }
+
   return (
     <div className="min-h-screen bg-gray-100 text-gray-800 font-sans antialiased">
       {/* Header */}
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/80 p-4 backdrop-blur-sm">
         <h1 className="text-xl font-bold text-gray-900">Log-scale Graph Digitizer</h1>
-        <div className="flex items-center gap-3 text-base">
+        <div className="flex flex-wrap items-center gap-3 text-base">
+          {/* ★ 최상단으로 이동한 버튼 */}
+          <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:s.points.slice(0,-1)}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300">Undo Last Point</button>
+          <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:[]}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active Series</button>
+
+          <div className="h-6 w-px bg-gray-300" />
           <button onClick={handleUndo} disabled={historyIndex <= 0} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Undo</button>
           <button onClick={handleRedo} disabled={historyIndex >= history.length - 1} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Redo</button>
           <div className="h-6 w-px bg-gray-300" />
@@ -807,8 +827,8 @@ export default function App() {
       <main className="grid grid-cols-1 gap-8 p-8 lg:grid-cols-[480px,1fr]">
         {/* Left Panel */}
         <aside className="flex flex-col gap-6">
-          {/* Axes & Guides */}
-          <AccordionSection title="Axes & Guides" isOpen={axesOpen} onToggle={() => setAxesOpen(v => !v)}>
+          {/* Axes */}
+          <AccordionSection title="Axes" isOpen={axesOpen} onToggle={() => setAxesOpen(v => !v)}>
             <div className="grid grid-cols-2 gap-4">
               <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={currentState.xLog} onChange={e => updateState(p => ({ ...p, xLog: e.target.checked }))} /> X Log Scale</label>
               <label className="flex items-center gap-3">X Min <input type="number" className="w-full rounded-md border px-3 py-2" value={currentState.xMin} onChange={e => updateState(p => ({ ...p, xMin: Number(e.target.value) }))} /></label>
@@ -816,27 +836,6 @@ export default function App() {
               <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={currentState.yLog} onChange={e => updateState(p => ({ ...p, yLog: e.target.checked }))} /> Y Log Scale</label>
               <label className="flex items-center gap-3">Y Min <input type="number" className="w-full rounded-md border px-3 py-2" value={currentState.yMin} onChange={e => updateState(p => ({ ...p, yMin: Number(e.target.value) }))} /></label>
               <label className="flex items-center gap-3">Y Max <input type="number" className="w-full rounded-md border px-3 py-2" value={currentState.yMax} onChange={e => updateState(p => ({ ...p, yMax: Number(e.target.value) }))} /></label>
-            </div>
-
-            <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
-              <div className="flex items-center justify-between">
-                <h4 className="font-semibold text-gray-600">Guides</h4>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={magnifyOn} onChange={(e) => setMagnifyOn(e.target.checked)} /> Magnifier</label>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-600">X</span>
-                <input className="flex-grow rounded-md border px-3 py-2" placeholder="e.g., 1000" value={guideInput} onChange={(e)=>setGuideInput(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter"){const v=Number(guideInput); if(isFinite(v)&&v>0) setGuideXs(g=>Array.from(new Set([...g,v])));}}}/>
-                <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{const v=Number(guideInput); if(isFinite(v)&&v>0) setGuideXs(g=>Array.from(new Set([...g,v])));}}>Add</button>
-                <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>setGuideXs([])}>Clear</button>
-                <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromX} onChange={(e)=>setShowCrossFromX(e.target.checked)} /> Cross</label>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-600">Y</span>
-                <input className="flex-grow rounded-md border px-3 py-2" placeholder="e.g., 10" value={guideYInput} onChange={(e)=>setGuideYInput(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter"){const v=Number(guideYInput); if(isFinite(v)&&v>0) setGuideYs(g=>Array.from(new Set([...g,v])));}}}/>
-                <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{const v=Number(guideYInput); if(isFinite(v)&&v>0) setGuideYs(g=>Array.from(new Set([...g,v])));}}>Add</button>
-                <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>setGuideYs([])}>Clear</button>
-                <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross</label>
-              </div>
             </div>
           </AccordionSection>
 
@@ -872,7 +871,15 @@ export default function App() {
 
           {/* Series & Points */}
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <h3 className="mb-4 text-xl font-bold text-gray-800">Series & Points</h3>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-xl font-bold text-gray-800">Series & Points</h3>
+              {/* ★ Magnifier를 여기로 이동 */}
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} />
+                Magnifier
+              </label>
+            </div>
+
             <div className="space-y-5 text-base">
               <div className="flex items-center gap-6">
                 <span className="text-lg font-bold">Active:</span>
@@ -895,15 +902,31 @@ export default function App() {
                 <label className="col-span-2 flex items-center gap-3">Size <input type="range" className="w-full" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} /></label>
               </div>
 
-              <div className="!mt-5 flex items-center gap-4 border-t border-gray-200 pt-4">
-                <button onClick={()=>updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:s.points.slice(0,-1)}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300">Undo Last Point</button>
-                <button onClick={()=>updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:[]}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active Series</button>
+              {/* ★ Guides UI → Series 마지막으로 이동 */}
+              <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-gray-600">Guides</h4>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-6 font-semibold text-gray-600">X</span>
+                  <input className="flex-grow rounded-md border px-3 py-2" placeholder="e.g., 1000" value={guideInput} onChange={(e)=>setGuideInput(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter"){const v=Number(guideInput); if(isFinite(v)&&v>0) setGuideXs(g=>Array.from(new Set([...g,v])));}}}/>
+                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{const v=Number(guideInput); if(isFinite(v)&&v>0) setGuideXs(g=>Array.from(new Set([...g,v])));}}>Add</button>
+                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>setGuideXs([])}>Clear</button>
+                  <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromX} onChange={(e)=>setShowCrossFromX(e.target.checked)} /> Cross</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-6 font-semibold text-gray-600">Y</span>
+                  <input className="flex-grow rounded-md border px-3 py-2" placeholder="e.g., 10" value={guideYInput} onChange={(e)=>setGuideYInput(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter"){const v=Number(guideYInput); if(isFinite(v)&&v>0) setGuideYs(g=>Array.from(new Set([...g,v])));}}}/>
+                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{const v=Number(guideYInput); if(isFinite(v)&&v>0) setGuideYs(g=>Array.from(new Set([...g,v])));}}>Add</button>
+                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>setGuideYs([])}>Clear</button>
+                  <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross</label>
+                </div>
               </div>
             </div>
           </div>
         </aside>
 
-        {/* Canvas */}
+        {/* Right: Canvas + 좌표 패널 */}
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <div className="mb-4 h-6 text-base text-gray-600">
             {hoverRef.current.x !== null ? (
@@ -926,6 +949,65 @@ export default function App() {
               onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg);}}
               onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
             />
+          </div>
+
+          {/* ★ 좌표 패널 (캔버스 하단) */}
+          <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {/* Points Table */}
+            <div className="rounded-lg border border-gray-200">
+              <div className="border-b px-4 py-2 font-semibold text-gray-700">Points</div>
+              <div className="max-h-64 overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Series</th>
+                      <th className="px-3 py-2 text-right">X</th>
+                      <th className="px-3 py-2 text-right">Y</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pointRows.length === 0 ? (
+                      <tr><td className="px-3 py-2 text-gray-400" colSpan={3}>No points</td></tr>
+                    ) : pointRows.map((r, i) => (
+                      <tr key={i} className="odd:bg-white even:bg-gray-50">
+                        <td className="px-3 py-1">{r.series}</td>
+                        <td className="px-3 py-1 text-right font-mono">{fmtReal(r.x)}</td>
+                        <td className="px-3 py-1 text-right font-mono">{fmtReal(r.y)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Guides Table */}
+            <div className="rounded-lg border border-gray-200">
+              <div className="border-b px-4 py-2 font-semibold text-gray-700">Guides</div>
+              <div className="max-h-64 overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Type</th>
+                      <th className="px-3 py-2 text-right">Guide</th>
+                      <th className="px-3 py-2 text-left">Series</th>
+                      <th className="px-3 py-2 text-right">{/* 값 라벨 */}Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {guideRows.length === 0 ? (
+                      <tr><td className="px-3 py-2 text-gray-400" colSpan={4}>No guides</td></tr>
+                    ) : guideRows.map((g, i) => (
+                      <tr key={i} className="odd:bg-white even:bg-gray-50">
+                        <td className="px-3 py-1">{g.kind === "X" ? "X-guide → y" : "Y-guide → x"}</td>
+                        <td className="px-3 py-1 text-right font-mono">{fmtReal(g.guide)}</td>
+                        <td className="px-3 py-1">{g.series}</td>
+                        <td className="px-3 py-1 text-right font-mono">{fmtReal(g.value)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
       </main>
