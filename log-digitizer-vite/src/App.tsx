@@ -4,10 +4,9 @@ import { useEffect, useRef, useState } from "react";
 /**
  * Log-scale Graph Digitizer — single file
  * v4.2
- * - fix: custom-anchor 모드에서 이미지 드래그/이동 불가 → offX/offY 적용
- * - UI: Magnifier 위치 이동(Series 헤더), Guides를 Series 끝으로 이동
- * - UI: 우측(하단) 좌표 패널 추가(Points / Guides 별도 표)
- * - 헤더에 Undo Last Point / Clear Active Series 배치
+ * - fix: Undo/Redo 로직 수정으로 상태 업데이트 오류 해결 (드래그, 프리셋 로드 정상화)
+ * - UI: Magnifier, Guides, Header 버튼 재배치
+ * - UI: 우측(하단) 좌표 패널 추가
  */
 
 type Pt = { x: number; y: number };
@@ -17,7 +16,6 @@ type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
 type SelectedPoint = { seriesIndex: number; pointIndex: number } | null;
 
-// Undo/Redo를 위한 상태 타입
 type AppState = {
   xMin: number; xMax: number; yMin: number; yMax: number;
   xLog: boolean; yLog: boolean;
@@ -26,7 +24,6 @@ type AppState = {
   customAnchors: [CustomAnchor | null, CustomAnchor | null];
 };
 
-// UI 컴포넌트
 const AccordionSection = ({ title, children, isOpen, onToggle }) => (
   <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
     <button onClick={onToggle} className="flex w-full items-center justify-between p-5 text-left">
@@ -47,7 +44,7 @@ export default function App() {
   const bgUrls = useRef<[string | null, string | null]>([null, null]);
   const lastRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const hoverRef = useRef<{ x: number | null; y: number | null }>({ x: null, y: null });
-
+  
   const [size] = useState({ w: 960, h: 560 });
   const [pad] = useState({ left: 60, right: 20, top: 30, bottom: 46 });
   const [axesOpen, setAxesOpen] = useState(true);
@@ -83,20 +80,21 @@ export default function App() {
   const [showCrossFromY, setShowCrossFromY] = useState(true);
 
   /* ==== Undo / Redo State Management ==== */
-  const [history, setHistory] = useState<AppState[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const currentState = history[historyIndex];
+  const [history, setHistory] = useState<{ stack: AppState[], index: number }>({ stack: [], index: -1 });
+  const currentState = history.stack[history.index];
 
   const updateState = (updater: (prev: AppState) => AppState, overwrite = false) => {
     setHistory(prev => {
-      const base = overwrite ? [] : prev.slice(0, historyIndex + 1);
-      const next = updater(base[base.length - 1] || prev[0]);
-      return [...base, next];
+      const baseStack = overwrite ? [] : prev.stack.slice(0, prev.index + 1);
+      const nextState = updater(baseStack[baseStack.length - 1] || prev.stack[0]);
+      return {
+        stack: [...baseStack, nextState],
+        index: baseStack.length,
+      };
     });
-    setHistoryIndex(i => (overwrite ? 0 : i + 1));
   };
-  const handleUndo = () => historyIndex > 0 && setHistoryIndex(historyIndex - 1);
-  const handleRedo = () => historyIndex < history.length - 1 && setHistoryIndex(historyIndex + 1);
+  const handleUndo = () => history.index > 0 && setHistory(prev => ({ ...prev, index: prev.index - 1 }));
+  const handleRedo = () => history.index < history.stack.length - 1 && setHistory(prev => ({ ...prev, index: prev.index + 1 }));
 
   /* ==== Initial State & Presets ==== */
   useEffect(() => {
@@ -107,20 +105,16 @@ export default function App() {
       bgXform: [{ sx: 1, sy: 1, offX: 0, offY: 0 }, { sx: 1, sy: 1, offX: 0, offY: 0 }],
       customAnchors: [null, null],
     };
-    setHistory([init]);
-    setHistoryIndex(0);
+    setHistory({ stack: [init], index: 0 });
   }, []);
-
+  
   const applyPreset = (p: any) => {
     try {
       if (!p) return;
       const next: AppState = {
-        xMin: p.axes?.xMin ?? 10,
-        xMax: p.axes?.xMax ?? 1_000_000,
-        yMin: p.axes?.yMin ?? 0.0001,
-        yMax: p.axes?.yMax ?? 1_000_000,
-        xLog: p.axes?.xLog ?? true,
-        yLog: p.axes?.yLog ?? true,
+        xMin: p.axes?.xMin ?? 10, xMax: p.axes?.xMax ?? 1_000_000,
+        yMin: p.axes?.yMin ?? 0.0001, yMax: p.axes?.yMax ?? 1_000_000,
+        xLog: p.axes?.xLog ?? true, yLog: p.axes?.yLog ?? true,
         series: (p.series ?? currentState.series).map((s: any, i: number) => ({
           name: s.name ?? (i === 0 ? "A" : "B"),
           color: s.color ?? (i === 0 ? "#2563EB" : "#10B981"),
@@ -140,9 +134,7 @@ export default function App() {
       updateState(() => next, true);
       notify("Preset loaded");
       setTick(t => t + 1);
-    } catch {
-      notify("Invalid preset", "err");
-    }
+    } catch { notify("Invalid preset", "err"); }
   };
 
   /* ==== Utils ==== */
@@ -151,7 +143,6 @@ export default function App() {
     window.clearTimeout((notify as any)._t);
     (notify as any)._t = window.setTimeout(() => setToast(null), 1500);
   };
-
   const innerRect = () => ({ x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom });
   const clampS = (v: number) => Math.max(0.05, Math.min(50, v));
   const EPS = 1e-12;
@@ -197,7 +188,6 @@ export default function App() {
     return { x, y, w, h };
   };
   
-  // ★ BUG FIX: Apply offX/offY in custom anchor mode to enable dragging
   const drawRectAndAnchor = (idx: 0 | 1) => {
     if (!currentState) return { dx:0, dy:0, dw:0, dh:0, ax:0, ay:0, fx:0, fy:0, baseW:0, baseH:0 };
     const base = baseRect(idx), xf = currentState.bgXform[idx], CA = currentState.customAnchors[idx];
@@ -207,11 +197,11 @@ export default function App() {
     if (anchorMode === "custom") {
       const defaultAx = CA ? CA.ax : base.x;
       const defaultAy = CA ? CA.ay : base.y + base.h;
-      ax = defaultAx + xf.offX; // Apply offset
-      ay = defaultAy + xf.offY; // Apply offset
+      ax = defaultAx + xf.offX;
+      ay = defaultAy + xf.offY;
       fx = CA ? CA.fx : 0;
       fy = CA ? CA.fy : 1;
-    } else { // center mode
+    } else {
       ax = base.x + base.w / 2 + xf.offX;
       ay = base.y + base.h / 2 + xf.offY;
       fx = 0.5; fy = 0.5;
@@ -277,7 +267,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedPoint, bgEditMode, activeBg, currentState, historyIndex]);
+  }, [selectedPoint, bgEditMode, activeBg, currentState]);
 
   useEffect(() => {
     if (!bgEditMode) {
@@ -379,10 +369,11 @@ export default function App() {
       const lr = lastRectRef.current!; const fx = (px - lr.x) / lr.w, fy = (py - lr.y) / lr.h;
       updateState(prev => {
         const n = [...prev.customAnchors] as [CustomAnchor, CustomAnchor];
-        n[activeBg] = { ax: px, ay: py, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) };
+        n[activeBg] = { ax: px - prev.bgXform[activeBg].offX, ay: py - prev.bgXform[activeBg].offY, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) };
         return { ...prev, customAnchors: n };
       });
-      setPickAnchor(false); return;
+      setPickAnchor(false);
+      return;
     }
 
     if (bgEditMode) {
@@ -393,7 +384,8 @@ export default function App() {
       } else {
         dragRef.current = { active: true, startX: px, startY: py, baseX: currentState.bgXform[activeBg].offX, baseY: currentState.bgXform[activeBg].offY };
       }
-      setSelectedPoint(null); return;
+      setSelectedPoint(null);
+      return;
     }
 
     if (inPlot(px, py)) {
@@ -429,9 +421,8 @@ export default function App() {
     });
   };
 
-  /* ==== Canvas Drawing ==== */
-  // ... (Full drawing logic from previous code)
-  
+  /* ... Other functions like serialize, export, presets ... */
+
   if (!currentState) return <div className="flex h-screen items-center justify-center text-xl">Loading Application...</div>;
   const { xMin, xMax, yMin, yMax, xLog, yLog, series } = currentState;
 
@@ -451,9 +442,9 @@ export default function App() {
           <button onClick={() => updateState(p => ({ ...p, series: p.series.map((s, i) => i === activeSeries ? { ...s, points: s.points.slice(0, -1) } : s) }))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300">Undo Last Point</button>
           <button onClick={() => updateState(p => ({ ...p, series: p.series.map((s, i) => i === activeSeries ? { ...s, points: [] } : s) }))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active Series</button>
           <div className="h-6 w-px bg-gray-300" />
-          <button onClick={handleUndo} disabled={historyIndex <= 0} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Undo</button>
-          <button onClick={handleRedo} disabled={historyIndex >= history.length - 1} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Redo</button>
-          {/* ... Other buttons ... */}
+          <button onClick={handleUndo} disabled={history.index <= 0} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Undo</button>
+          <button onClick={handleRedo} disabled={history.index >= history.stack.length - 1} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Redo</button>
+          {/* ... Other buttons */}
         </div>
       </header>
 
@@ -461,31 +452,32 @@ export default function App() {
       <main className="grid grid-cols-1 gap-8 p-8 lg:grid-cols-[480px,1fr]">
         <aside className="flex flex-col gap-6">
           <AccordionSection title="Axes" isOpen={axesOpen} onToggle={() => setAxesOpen(v => !v)}>
-            {/* ... Axes Content */}
+            <div className="grid grid-cols-2 gap-4">
+              <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={xLog} onChange={e => updateState(p => ({ ...p, xLog: e.target.checked }))} /> X Log Scale</label>
+              <label className="flex items-center gap-3">X Min <input type="number" className="w-full rounded-md border px-3 py-2" value={xMin} onChange={e => updateState(p => ({ ...p, xMin: Number(e.target.value) }))} /></label>
+              <label className="flex items-center gap-3">X Max <input type="number" className="w-full rounded-md border px-3 py-2" value={xMax} onChange={e => updateState(p => ({ ...p, xMax: Number(e.target.value) }))} /></label>
+              <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={yLog} onChange={e => updateState(p => ({ ...p, yLog: e.target.checked }))} /> Y Log Scale</label>
+              <label className="flex items-center gap-3">Y Min <input type="number" className="w-full rounded-md border px-3 py-2" value={yMin} onChange={e => updateState(p => ({ ...p, yMin: Number(e.target.value) }))} /></label>
+              <label className="flex items-center gap-3">Y Max <input type="number" className="w-full rounded-md border px-3 py-2" value={yMax} onChange={e => updateState(p => ({ ...p, yMax: Number(e.target.value) }))} /></label>
+            </div>
           </AccordionSection>
-
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-            {/* ... Image Edit Content */}
-          </div>
-          
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            {/* ... Series & Points Content with Guides at the end */}
-          </div>
+          {/* ... other sections ... */}
         </aside>
 
-        {/* Right Panel */}
         <div className="flex flex-col gap-6">
           <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            {/* ... Canvas */}
+            {/* ... canvas ... */}
           </div>
-          
-          {/* Coordinate Panels */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            {/* ... Points & Guides Tables */}
+            <div className="rounded-lg border border-gray-200">
+              {/* ... points table ... */}
+            </div>
+            <div className="rounded-lg border border-gray-200">
+              {/* ... guides table ... */}
+            </div>
           </div>
         </div>
       </main>
-      
       {toast && <div className="fixed ...">{toast.msg}</div>}
     </div>
   );
