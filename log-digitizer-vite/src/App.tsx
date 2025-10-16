@@ -189,8 +189,8 @@ export default function App() {
     if (anchorMode === "custom") {
       const dax = CA ? CA.ax : base.x;
       const day = CA ? CA.ay : base.y + base.h;
-      ax = dax + xf.offX;            // ← offX 적용
-      ay = day + xf.offY;            // ← offY 적용
+      ax = dax;               // ← 앵커가 있을 땐 오프셋 무시 (고정)
+      ay = day;
       fx = CA ? CA.fx : 0;
       fy = CA ? CA.fy : 1;
     } else {
@@ -788,15 +788,19 @@ export default function App() {
 
   /* ======= 좌표 패널 데이터 ======= */
   const pointRows = currentState.series
-    .flatMap((s) => s.points.map((p) => ({ series: s.name, x: p.x, y: p.y })))
-    .sort((a, b) => a.x - b.x);
+  .flatMap((s, si) => s.points.map((p) => ({ seriesIndex: si, series: s.name, x: p.x, y: p.y })))
+  .sort((a, b) => (a.seriesIndex - b.seriesIndex) || (a.x - b.x));
 
-  const guideRows: Array<{ kind: "X" | "Y"; guide: number; series: string; value: number | null }> = [];
+    const guideRows: Array<{ kind: "X" | "Y"; guide: number; series: string; value: number | null }> = [];
   for (const gx of guideXs) {
-    currentState.series.forEach(s => guideRows.push({ kind: "X", guide: gx, series: s.name, value: yAtX(s.points, gx) }));
+    currentState.series.forEach(s =>
+      guideRows.push({ kind: "X", guide: gx, series: s.name, value: yAtX(s.points, gx) })
+    );
   }
   for (const gy of guideYs) {
-    currentState.series.forEach(s => guideRows.push({ kind: "Y", guide: gy, series: s.name, value: xAtY(s.points, gy) }));
+    currentState.series.forEach(s =>
+      guideRows.push({ kind: "Y", guide: gy, series: s.name, value: xAtY(s.points, gy) })
+    );
   }
 
   return (
