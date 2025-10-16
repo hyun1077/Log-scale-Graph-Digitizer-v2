@@ -962,11 +962,13 @@ export default function App() {
               <div className="border-b px-4 py-2 font-semibold text-gray-700">Points</div>
               <div className="max-h-64 overflow-auto">
                 <table className="min-w-full text-sm">
+                  <table className="min-w-full text-sm table-fixed">
                   <thead className="sticky top-0 bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-left">Series</th>
-                      <th className="px-3 py-2 text-right">X</th>
-                      <th className="px-3 py-2 text-right">Y</th>
+                      <th className="px-3 py-2 text-left w-28">Type</th>
+                      <th className="px-3 py-2 text-right w-40">Guide</th>   {/* ← 폭 늘림 */}
+                      <th className="px-3 py-2 text-left w-40">Series</th>
+                      <th className="px-3 py-2 text-right w-36">Value</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1002,10 +1004,14 @@ export default function App() {
                       <tr><td className="px-3 py-2 text-gray-400" colSpan={4}>No guides</td></tr>
                     ) : guideRows.map((g, i) => (
                       <tr key={i} className="odd:bg-white even:bg-gray-50">
-                        <td className="px-3 py-1">{g.kind === "X" ? "X-guide → y" : "Y-guide → x"}</td>
-                        <td className="px-3 py-1 text-right font-mono">{fmtReal(g.guide)}</td>
-                        <td className="px-3 py-1">{g.series}</td>
-                        <td className="px-3 py-1 text-right font-mono">{fmtReal(g.value)}</td>
+                       <td className="px-3 py-1 w-28">{g.kind === "X" ? "X-guide → y" : "Y-guide → x"}</td>
+                       <td className="px-3 py-1 text-right font-mono w-40 whitespace-nowrap">
+                          {g.guideLabel}   {/* ← 입력 원문 그대로 표시 */}
+                        </td>
+                        <td className="px-3 py-1 w-40">{g.series}</td>
+                        <td className="px-3 py-1 text-right font-mono w-36 whitespace-nowrap">
+                          {fmtReal(g.value)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
