@@ -3,13 +3,14 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Log-scale Graph Digitizer — single file
- * 업데이트:
- *  - Guide X에 더해 Guide Y(가로선) 추가: [Add] [Clear] [Add from Cursor]
- *  - 두 가이드 모두 모든 시리즈와의 교점 포인트/라벨 표시
- *  - 커서/가이드 라벨 등 모든 좌표값을 "실수값(비로그)"로 표시
- *  - Series 이름 입력, Smooth 강도, Image A/B(이전 요청 반영)
- *  - Save to/Load from Local 버튼 제거(자동 저장만 유지)
- *  - 기본 앵커: custom(없으면 좌하 기준)
+ * 업데이트 요약
+ *  - Guide X/Y: 교점 방향 보조선(점선) 표시 토글 추가
+ *  - Series 이름 입력, Smooth 강도, Image A/B(이전 반영)
+ *  - Undo/Clear는 Series 섹션 하단으로 이동
+ *  - 상단 툴바: Save preset / Load preset / Copy URL / Export CSV / Export PNG
+ *  - Reset Axes / Hard Reset 제거
+ *  - 좌표 표기는 모두 "실수(비로그)" 값
+ *  - 기본 앵커: custom(없으면 좌하)
  */
 
 type Pt = { x: number; y: number };
@@ -18,7 +19,6 @@ type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type AnchorMode = "center" | "custom";
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
-
 type PresetV1 = any;
 
 export default function App() {
@@ -33,14 +33,15 @@ export default function App() {
   const hoverRef = useRef<{ x: number | null; y: number | null }>({ x: null, y: null });
 
   const [tick, setTick] = useState(0);
-  const [size, setSize] = useState({ w: 960, h: 560 });
-  const [pad, setPad] = useState({ left: 60, right: 20, top: 30, bottom: 46 });
+  const [size] = useState({ w: 960, h: 560 });
+  const [pad] = useState({ left: 60, right: 20, top: 30, bottom: 46 });
 
-  // 기본 축값: X 10~1e6, Y 1e-4~1e6, 로그스케일
+  // 축
   const [xMin, setXMin] = useState(10), [xMax, setXMax] = useState(1_000_000);
   const [yMin, setYMin] = useState(0.0001), [yMax, setYMax] = useState(1_000_000);
   const [xLog, setXLog] = useState(true), [yLog, setYLog] = useState(true);
 
+  // 시리즈
   const [series, setSeries] = useState<Series[]>([
     { name: "A", color: "#2563EB", points: [] },
     { name: "B", color: "#10B981", points: [] },
@@ -50,27 +51,31 @@ export default function App() {
   const [lineWidth, setLineWidth] = useState(1.6);
   const [lineAlpha, setLineAlpha] = useState(0.9);
   const [smoothLines, setSmoothLines] = useState(true);
-  const [smoothAlpha, setSmoothAlpha] = useState(0.35); // 0=부드러움↑, 1=직선에 가까움
+  const [smoothAlpha, setSmoothAlpha] = useState(0.35);
   const [ptRadius, setPtRadius] = useState(5);
   const [showPoints, setShowPoints] = useState(true);
+
+  // 확대경
   const [magnifyOn, setMagnifyOn] = useState(false);
   const [magnifyFactor, setMagnifyFactor] = useState(3);
 
+  // 배경
   const [bgList, setBgList] = useState<Array<{ w: number; h: number } | null>>([null, null]);
   const [bgXform, setBgXform] = useState<[BgXf, BgXf]>([
     { sx: 1, sy: 1, offX: 0, offY: 0 },
     { sx: 1, sy: 1, offX: 0, offY: 0 },
   ]);
-  const [keepAspect, setKeepAspect] = useState(false); // 기본 해제
+  const [keepAspect, setKeepAspect] = useState(false);
   const [showAB, setShowAB] = useState<[boolean, boolean]>([true, true]);
   const [opacityAB, setOpacityAB] = useState<[number, number]>([1, 0.6]);
   const [activeBg, setActiveBg] = useState<0 | 1>(0);
 
-  // 기본 모드: custom, 커스텀 없으면 좌하 기준
+  // 앵커: 기본 custom, 없으면 좌하
   const [anchorMode, setAnchorMode] = useState<AnchorMode>("custom");
   const [customAnchors, setCustomAnchors] = useState<[CustomAnchor, CustomAnchor]>([null, null]);
   const [pickAnchor, setPickAnchor] = useState(false);
 
+  // 편집/오류
   const [bgEditMode, setBgEditMode] = useState(true);
   const [hoverHandle, setHoverHandle] = useState<Handle>("none");
   const [loadError, setLoadError] = useState<[string | null, string | null]>([null, null]);
@@ -78,6 +83,7 @@ export default function App() {
   const dragRef = useRef({ active: false, startX: 0, startY: 0, baseX: 0, baseY: 0 });
   const resizeRef = useRef({ active: false, mode: "none" as Handle, ax: 0, ay: 0, fx: 0.5, fy: 0.5, baseW: 1, baseH: 1 });
 
+  // 알림
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" } | null>(null);
   const notify = (msg: string, kind: "ok" | "err" = "ok") => {
     setToast({ msg, kind });
@@ -85,14 +91,15 @@ export default function App() {
     (notify as any)._t = window.setTimeout(() => setToast(null), 1600);
   };
 
-  // Guides: X/Y 값 목록 + 입력 상태
+  // 가이드 (X/Y)
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [guideInput, setGuideInput] = useState<string>("");
   const [inlineX, setInlineX] = useState<number | null>(null);
-
   const [guideYs, setGuideYs] = useState<number[]>([]);
   const [guideYInput, setGuideYInput] = useState<string>("");
   const [inlineY, setInlineY] = useState<number | null>(null);
+  const [showCrossFromX, setShowCrossFromX] = useState(true); // X가이드의 가로 보조선
+  const [showCrossFromY, setShowCrossFromY] = useState(true); // Y가이드의 세로 보조선
 
   /* ==== Math / Util ==== */
   const innerRect = () => ({ x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom });
@@ -122,14 +129,11 @@ export default function App() {
   const drawRectAndAnchor = (idx: 0 | 1) => {
     const base = baseRect(idx), xf = bgXform[idx], CA = customAnchors[idx];
     const dw = base.w * clampS(xf.sx), dh = base.h * clampS(xf.sy);
-    // 기본 anchor는 custom 모드 + 좌하(커스텀이 없으면)
+    // 기본 anchor는 custom+좌하
     let ax: number, ay: number, fx: number, fy: number;
     if (anchorMode === "custom") {
-      if (CA) {
-        ax = CA.ax; ay = CA.ay; fx = CA.fx; fy = CA.fy;
-      } else {
-        ax = base.x; ay = base.y + base.h; fx = 0; fy = 1;
-      }
+      if (CA) { ax = CA.ax; ay = CA.ay; fx = CA.fx; fy = CA.fy; }
+      else { ax = base.x; ay = base.y + base.h; fx = 0; fy = 1; }
     } else {
       ax = base.x + base.w / 2 + xf.offX; ay = base.y + base.h / 2 + xf.offY; fx = 0.5; fy = 0.5;
     }
@@ -137,7 +141,7 @@ export default function App() {
     return { dx, dy, dw, dh, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
   };
 
-  /* ==== Guide 보간: y(x), x(y) ==== */
+  /* ==== Guide 보간 ==== */
   function yAtX(seriesPts: Pt[], xTarget: number): number | null {
     if (!seriesPts || seriesPts.length < 2) return null;
     const tx = (x: number) => tVal(x, xLog);
@@ -177,7 +181,7 @@ export default function App() {
   const fmtReal = (v: number | null) => {
     if (v === null || !isFinite(v)) return "-";
     const a = Math.abs(v);
-    const s = a >= 1e6 || a < 1e-4 ? v.toPrecision(6) : v.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    const s = a >= 1e6 || a < 1e-4 ? Number(v).toPrecision(6) : Number(v).toLocaleString(undefined, { maximumFractionDigits: 6 });
     return s.replace(/\.?0+$/,'');
   };
   const inlineLabelForX = (x: number) => {
@@ -247,6 +251,7 @@ export default function App() {
       ctx.fillStyle = "#fff"; ctx.fillRect(r.x, r.y, r.w, r.h);
       lastRectRef.current = null;
 
+      // 배경
       for (let i = 0 as 0 | 1; i <= 1; i = ((i + 1) as 0 | 1)) {
         const img = bgRefs.current[i], meta = bgList[i];
         if (!img || !meta || !showAB[i] || opacityAB[i] <= 0) continue;
@@ -274,32 +279,31 @@ export default function App() {
 
       drawGrid(ctx);
 
-      // === Guide X(세로)선 & 교점 ===
+      // === Guide X: 세로선 + (옵션)가로 보조선 + 교점 마커/라벨 ===
       if (guideXs.length) {
         const rr = innerRect();
         ctx.save();
         ctx.setLineDash([6, 4]);
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = "#EF4444"; // red
-        ctx.fillStyle = "#EF4444";
         for (const gx of guideXs) {
           const gp = dataToPixel(gx, 1);
-          ctx.beginPath();
-          ctx.moveTo(gp.px, rr.y);
-          ctx.lineTo(gp.px, rr.y + rr.h);
-          ctx.stroke();
+          // 메인 세로선
+          ctx.strokeStyle = "#EF4444";
+          ctx.beginPath(); ctx.moveTo(gp.px, rr.y); ctx.lineTo(gp.px, rr.y + rr.h); ctx.stroke();
+          // 시리즈별 교차
           series.forEach((s) => {
             const y = yAtX(s.points, gx);
             if (y === null || !isFinite(y)) return;
             const P = dataToPixel(gx, y);
-            ctx.beginPath();
-            ctx.arc(P.px, P.py, 4, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.save();
-            ctx.font = "11px ui-sans-serif, system-ui";
-            ctx.fillStyle = "#0f172a";
-            ctx.textAlign = "left";
-            ctx.textBaseline = "bottom";
+            // 보조 가로선
+            if (showCrossFromX) {
+              ctx.strokeStyle = "rgba(239,68,68,0.5)";
+              ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke();
+            }
+            // 마커 & 라벨
+            ctx.fillStyle = "#EF4444";
+            ctx.beginPath(); ctx.arc(P.px, P.py, 4, 0, Math.PI * 2); ctx.fill();
+            ctx.save(); ctx.font = "11px ui-sans-serif, system-ui"; ctx.fillStyle = "#0f172a"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
             ctx.fillText(`${s.name}: y=${fmtReal(y)}`, P.px + 6, P.py - 2);
             ctx.restore();
           });
@@ -307,32 +311,31 @@ export default function App() {
         ctx.restore();
       }
 
-      // === Guide Y(가로)선 & 교점 ===
+      // === Guide Y: 가로선 + (옵션)세로 보조선 + 교점 마커/라벨 ===
       if (guideYs.length) {
         const rr = innerRect();
         ctx.save();
         ctx.setLineDash([6, 4]);
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = "#3B82F6"; // blue
-        ctx.fillStyle = "#3B82F6";
         for (const gy of guideYs) {
           const gp = dataToPixel(1, gy);
-          ctx.beginPath();
-          ctx.moveTo(rr.x, gp.py);
-          ctx.lineTo(rr.x + rr.w, gp.py);
-          ctx.stroke();
+          // 메인 가로선
+          ctx.strokeStyle = "#3B82F6";
+          ctx.beginPath(); ctx.moveTo(rr.x, gp.py); ctx.lineTo(rr.x + rr.w, gp.py); ctx.stroke();
+          // 시리즈별 교차
           series.forEach((s) => {
             const x = xAtY(s.points, gy);
             if (x === null || !isFinite(x)) return;
             const P = dataToPixel(x, gy);
-            ctx.beginPath();
-            ctx.arc(P.px, P.py, 4, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.save();
-            ctx.font = "11px ui-sans-serif, system-ui";
-            ctx.fillStyle = "#0f172a";
-            ctx.textAlign = "left";
-            ctx.textBaseline = "top";
+            // 보조 세로선
+            if (showCrossFromY) {
+              ctx.strokeStyle = "rgba(59,130,246,0.5)";
+              ctx.beginPath(); ctx.moveTo(P.px, rr.y); ctx.lineTo(P.px, rr.y + rr.h); ctx.stroke();
+            }
+            // 마커 & 라벨
+            ctx.fillStyle = "#3B82F6";
+            ctx.beginPath(); ctx.arc(P.px, P.py, 4, 0, Math.PI * 2); ctx.fill();
+            ctx.save(); ctx.font = "11px ui-sans-serif, system-ui"; ctx.fillStyle = "#0f172a"; ctx.textAlign = "left"; ctx.textBaseline = "top";
             ctx.fillText(`${s.name}: x=${fmtReal(x)}`, P.px + 6, P.py + 2);
             ctx.restore();
           });
@@ -340,57 +343,46 @@ export default function App() {
         ctx.restore();
       }
 
-      // Lines
+      // 선 & 포인트
       if (connectLines) {
         const rr = innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x, rr.y, rr.w, rr.h); ctx.clip();
         ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
         for (const s of series) {
-          if (s.points.length < 2) continue; const pts = [...s.points];
-          const pxPts = pts.map(p=> dataToPixel(p.x,p.y));
+          if (s.points.length < 2) continue;
+          const pxPts = s.points.map(p=> dataToPixel(p.x,p.y));
           ctx.strokeStyle = s.color; ctx.beginPath();
-          if (smoothLines && pxPts.length>=2) {
-            catmullRomPath(ctx, pxPts, smoothAlpha);
-          } else {
-            ctx.moveTo(pxPts[0].px, pxPts[0].py);
-            for (let i=1;i<pxPts.length;i++){ ctx.lineTo(pxPts[i].px, pxPts[i].py); }
-          }
+          if (smoothLines && pxPts.length>=2) catmullRomPath(ctx, pxPts, smoothAlpha);
+          else { ctx.moveTo(pxPts[0].px, pxPts[0].py); for (let i=1;i<pxPts.length;i++){ ctx.lineTo(pxPts[i].px, pxPts[i].py); } }
           ctx.stroke();
         }
         ctx.globalAlpha = 1; ctx.restore();
       }
-
-      // Points
       if (showPoints) {
-         for (const s of series) {
-           ctx.fillStyle = s.color;
-           ctx.strokeStyle = "#fff";
-           for (const p of s.points) {
-             const P = dataToPixel(p.x, p.y);
-             ctx.beginPath();
-             ctx.arc(P.px, P.py, ptRadius, 0, Math.PI * 2);
-             ctx.fill();
-             if (ptRadius >= 3) {
-               ctx.lineWidth = 1;
-               ctx.stroke();
-             }
-           }
-         }
-       }
+        for (const s of series) {
+          ctx.fillStyle = s.color; ctx.strokeStyle = "#fff";
+          for (const p of s.points) {
+            const P = dataToPixel(p.x, p.y);
+            ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI * 2); ctx.fill();
+            if (ptRadius >= 3) { ctx.lineWidth = 1; ctx.stroke(); }
+          }
+        }
+      }
 
-      // Hover crosshair (실수값 표기)
+      // 커서 십자선
       if (hoverRef.current.x !== null && hoverRef.current.y !== null) {
         const P = dataToPixel(hoverRef.current.x, hoverRef.current.y), rr = innerRect();
         ctx.save(); ctx.strokeStyle = "#94a3b8"; ctx.setLineDash([4,3]);
         ctx.beginPath(); ctx.moveTo(P.px, rr.y); ctx.lineTo(P.px, rr.y + rr.h); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); ctx.restore(); drawCross(ctx, P.px, P.py, 7);
+        ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); ctx.restore();
+        drawCross(ctx, P.px, P.py, 7);
       }
 
-      // Axis frame + labels
+      // 프레임/축 라벨
       ctx.strokeStyle = "#374151"; ctx.lineWidth = 1.2; ctx.strokeRect(r.x, r.y, r.w, r.h);
       ctx.fillStyle = "#111827"; ctx.font = "14px ui-sans-serif, system-ui"; ctx.textAlign = "center"; ctx.fillText(xLog?"X (10^n)":"X", r.x + r.w/2, r.y + r.h + 34);
       ctx.save(); ctx.translate(r.x-45, r.y + r.h/2); ctx.rotate(-Math.PI/2); ctx.fillText(yLog?"Y (10^n)":"Y", 0, 0); ctx.restore();
 
-      // Magnifier
+      // 확대경
       if (magnifyOn && hoverRef.current.x!==null && hoverRef.current.y!==null){
         const hp = dataToPixel(hoverRef.current.x!, hoverRef.current.y!);
         const sz=120, f=magnifyFactor; const sx=Math.max(0, Math.min(size.w-sz/f, hp.px - sz/(2*f))), sy=Math.max(0, Math.min(size.h-sz/f, hp.py - sz/(2*f)));
@@ -400,7 +392,7 @@ export default function App() {
         ctx.beginPath(); ctx.moveTo(size.w - sz - 16 + sz/2, 16); ctx.lineTo(size.w - sz - 16 + sz/2, 16+sz); ctx.moveTo(size.w - sz - 16, 16+sz/2); ctx.lineTo(size.w - 16, 16+sz/2); ctx.stroke(); ctx.restore();
       }
 
-      // Legend — 좌측정렬 & 크게
+      // 레전드
       ctx.save();
       const rr2 = innerRect();
       ctx.font = "600 16px ui-sans-serif, system-ui";
@@ -418,24 +410,25 @@ export default function App() {
       ctx.restore();
 
     } catch (err) {
-      console.error("draw error", err); setToast({ msg: "Render error. Axes reset.", kind: "err" });
-      setXMin(10); setXMax(1_000_000); setYMin(0.0001); setYMax(1_000_000);
+      console.error("draw error", err);
     }
       }, [
-       size, pad,
        xMin, xMax, yMin, yMax, xLog, yLog,
-       series,
+       series, connectLines, lineWidth, lineAlpha, smoothLines, smoothAlpha,
+       ptRadius, showPoints,
        bgList, showAB, opacityAB, activeBg, keepAspect, bgXform,
        anchorMode, customAnchors, hoverHandle, pickAnchor,
-       connectLines, lineWidth, lineAlpha, smoothLines, smoothAlpha,
-       ptRadius, showPoints,
        magnifyOn, magnifyFactor,
        activeSeries,
-       guideXs, guideYs,
+       guideXs, guideYs, showCrossFromX, showCrossFromY,
        tick
       ]);
 
-  function drawCross(ctx: CanvasRenderingContext2D, x: number, y: number, r = 5) { ctx.save(); ctx.strokeStyle = "#2563EB"; ctx.beginPath(); ctx.moveTo(x-r,y); ctx.lineTo(x+r,y); ctx.moveTo(x,y-r); ctx.lineTo(x,y+r); ctx.stroke(); ctx.restore(); }
+  function drawCross(ctx: CanvasRenderingContext2D, x: number, y: number, r = 5) {
+    ctx.save(); ctx.strokeStyle = "#2563EB";
+    ctx.beginPath(); ctx.moveTo(x-r,y); ctx.lineTo(x+r,y);
+    ctx.moveTo(x,y-r); ctx.lineTo(x,y+r); ctx.stroke(); ctx.restore();
+  }
   function catmullRomPath(ctx: CanvasRenderingContext2D, pts: {px:number;py:number}[], alpha=0.5){
     if(pts.length<2){ const p=pts[0]; ctx.moveTo(p.px,p.py); return; }
     ctx.moveTo(pts[0].px, pts[0].py);
@@ -452,14 +445,17 @@ export default function App() {
     }
   }
   function numFmt(v:number, step?:number){ if(!isFinite(v)) return ""; const abs=Math.abs(v); if(abs===0) return "0"; const d = step!==undefined? Math.max(0, Math.min(6, -Math.floor(Math.log10(Math.max(1e-12, step))))) : Math.max(0, Math.min(6, 3 - Math.floor(Math.log10(Math.max(1e-12, abs))))); if(abs>=1e5||abs<1e-3) return v.toExponential(2); return v.toFixed(d); }
-
-  // pretty label: 10^n (축 눈금은 유지)
   const SUPMAP: Record<string,string> = {"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","-":"⁻","+":"⁺",".":"."};
   function supify(exp:number|string){ const s=String(exp); return s.split("").map(ch=> SUPMAP[ch] ?? ch).join(""); }
   function pow10LabelInt(n:number){ return `10${supify(n)}`; }
 
   function drawGrid(ctx: CanvasRenderingContext2D) {
-    const r = innerRect(), mm = tMinMax(); if(!isFinite(mm.xmin)||!isFinite(mm.xmax)||!isFinite(mm.ymin)||!isFinite(mm.ymax)||mm.xmax<=mm.xmin||mm.ymax<=mm.ymin){ ctx.save(); ctx.fillStyle="#9CA3AF"; ctx.font="12px ui-sans-serif, system-ui"; ctx.fillText("Invalid axis range", r.x + r.w/2, r.y + r.h/2); ctx.restore(); return; } ctx.save(); ctx.strokeStyle = "#E5E7EB"; ctx.fillStyle = "#6B7280"; ctx.lineWidth = 1; ctx.font = "12px ui-sans-serif, system-ui";
+    const r = innerRect(), mm = tMinMax();
+    if(!isFinite(mm.xmin)||!isFinite(mm.xmax)||!isFinite(mm.ymin)||!isFinite(mm.ymax)||mm.xmax<=mm.xmin||mm.ymax<=mm.ymin){
+      ctx.save(); ctx.fillStyle="#9CA3AF"; ctx.font="12px ui-sans-serif, system-ui";
+      ctx.fillText("Invalid axis range", r.x + r.w/2, r.y + r.h/2); ctx.restore(); return;
+    }
+    ctx.save(); ctx.strokeStyle = "#E5E7EB"; ctx.fillStyle = "#6B7280"; ctx.lineWidth = 1; ctx.font = "12px ui-sans-serif, system-ui";
     if (xLog) { const n0=Math.floor(mm.xmin), n1=Math.ceil(mm.xmax); for (let n=n0;n<=n1;n++){ const px = dataToPixel(Math.pow(10,n),1).px; ctx.beginPath(); ctx.moveTo(px,r.y); ctx.lineTo(px,r.y+r.h); ctx.stroke(); ctx.textAlign="center"; ctx.fillText(pow10LabelInt(n), px, r.y+r.h+18); for(let m=2;m<10;m++){ const v=Math.pow(10,n)*m, lv=Math.log10(v); if(lv>mm.xmax)break; if(lv<mm.xmin)continue; const xm=dataToPixel(v,1).px; ctx.save(); ctx.strokeStyle="#F3F4F6"; ctx.beginPath(); ctx.moveTo(xm,r.y); ctx.lineTo(xm,r.y+r.h); ctx.stroke(); ctx.restore(); } } } else { const steps=10; for(let i=0;i<=steps;i++){ const t=i/steps, px=r.x+t*r.w; ctx.beginPath(); ctx.moveTo(px,r.y); ctx.lineTo(px,r.y+r.h); ctx.stroke(); ctx.textAlign="center"; ctx.fillText(numFmt(xMin+t*(xMax-xMin), (xMax-xMin)/10), px, r.y+r.h+18); } }
     if (yLog) { const n0=Math.floor(mm.ymin), n1=Math.ceil(mm.ymax); for (let n=n0;n<=n1;n++){ const py = dataToPixel(1,Math.pow(10,n)).py; ctx.beginPath(); ctx.moveTo(r.x,py); ctx.lineTo(r.x+r.w,py); ctx.stroke(); ctx.textAlign="right"; ctx.fillText(pow10LabelInt(n), r.x-6, py+4); for(let m=2;m<10;m++){ const v=Math.pow(10,n)*m, lv=Math.log10(v); if(lv>mm.ymax)break; if(lv<mm.ymin)continue; const ym=dataToPixel(1,v).py; ctx.save(); ctx.strokeStyle="#F3F4F6"; ctx.beginPath(); ctx.moveTo(r.x,ym); ctx.lineTo(r.x+r.w,ym); ctx.stroke(); ctx.restore(); } } } else { const steps=10; for(let i=0;i<=steps;i++){ const t=i/steps, py=r.y+(1-t)*r.h, val=yMin+t*(yMax-yMin); ctx.beginPath(); ctx.moveTo(r.x,py); ctx.lineTo(r.x+r.w,py); ctx.stroke(); ctx.textAlign="right"; ctx.fillText(numFmt(val, (yMax-yMin)/10), r.x-6, py+4); } }
     ctx.restore();
@@ -527,178 +523,143 @@ export default function App() {
     setTick(t => (t + 1) & 0xffff);
   };
 
+  // 프리셋
   const serialize = ():PresetV1 => ({
-    v:1, size, pad,
+    v:1,
     axes:{xMin,xMax,yMin,yMax,xLog,yLog},
     series,
     ui:{activeSeries},
     connect:{connectLines, lineWidth, lineAlpha, smoothLines, smoothAlpha},
     bg:{ keepAspect, anchorMode, customAnchors, activeBg, showAB, opacityAB, xform:bgXform },
     images: bgUrls.current,
-    guidesX: guideXs,
-    guidesY: guideYs
+    guidesX: guideXs, guidesY: guideYs,
+    cross:{ fromX: showCrossFromX, fromY: showCrossFromY }
   });
   const applyPreset = (p:any) => { try {
     if(!p) return;
-    p.size&&setSize(p.size); p.pad&&setPad(p.pad);
     if(p.axes){ setXMin(p.axes.xMin); setXMax(p.axes.xMax); setYMin(p.axes.yMin); setYMax(p.axes.yMax); setXLog(!!p.axes.xLog); setYLog(!!p.axes.yLog); }
     Array.isArray(p.series)&&setSeries(p.series);
     p.ui&&setActiveSeries(p.ui.activeSeries??0);
     if(p.connect){ setConnectLines(!!p.connect.connectLines); setLineWidth(p.connect.lineWidth??1.6); setLineAlpha(p.connect.lineAlpha??0.9); setSmoothLines(!!p.connect.smoothLines); if(typeof p.connect.smoothAlpha==="number") setSmoothAlpha(p.connect.smoothAlpha); }
-    if(p.bg){
-      setKeepAspect(!!p.bg.keepAspect);
-      p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode);
-      Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors);
-      typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg);
-      Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB);
-      Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB);
-      Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform);
-    }
-    if(Array.isArray(p.images)){
-      p.images.forEach((src:string|null,idx:number)=>{
-        if(!src) return; const i = new Image(); i.crossOrigin = "anonymous";
-        i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); };
-        i.src = src;
-      });
-    }
+    if(p.bg){ setKeepAspect(!!p.bg.keepAspect); p.bg.anchorMode&&setAnchorMode(p.bg.anchorMode); Array.isArray(p.bg.customAnchors)&&setCustomAnchors(p.bg.customAnchors); typeof p.bg.activeBg!="undefined"&&setActiveBg(p.bg.activeBg); Array.isArray(p.bg.showAB)&&setShowAB(p.bg.showAB); Array.isArray(p.bg.opacityAB)&&setOpacityAB(p.bg.opacityAB); Array.isArray(p.bg.xform)&&setBgXform(p.bg.xform); }
+    if(Array.isArray(p.images)){ p.images.forEach((src:string|null,idx:number)=>{ if(!src) return; const i = new Image(); i.crossOrigin="anonymous"; i.onload = ()=>{ bgRefs.current[idx]=i; bgUrls.current[idx]=src; setBgList(cur=>{ const n=[...cur]; n[idx]={w:i.width,h:i.height}; return n; }); }; i.src = src; }); }
     if(Array.isArray(p.guidesX)) setGuideXs(p.guidesX.filter((v:any)=> isFinite(v) && v>0));
     if(Array.isArray(p.guidesY)) setGuideYs(p.guidesY.filter((v:any)=> isFinite(v) && v>0));
+    if(p.cross){ if(typeof p.cross.fromX==="boolean") setShowCrossFromX(p.cross.fromX); if(typeof p.cross.fromY==="boolean") setShowCrossFromY(p.cross.fromY); }
   } catch(e){ console.warn("preset apply fail", e);} };
 
   const savePresetFile = async () => {
     const data = JSON.stringify(serialize(), null, 2);
-    try { if (typeof (window as any).showSaveFilePicker === "function") {
-      const handle = await (window as any).showSaveFilePicker({ suggestedName:`digitizer_preset_${Date.now()}.json`, types:[{description:"JSON", accept:{"application/json":[".json"]}}] });
-      const w = await handle.createWritable(); await w.write(new Blob([data],{type:"application/json"})); await w.close(); notify("Preset saved as file."); return;
-    } } catch(err){ console.warn("picker fail; fallback", err); }
+    try {
+      if (typeof (window as any).showSaveFilePicker === "function") {
+        const handle = await (window as any).showSaveFilePicker({ suggestedName:`digitizer_preset_${Date.now()}.json`, types:[{description:"JSON", accept:{"application/json":[".json"]}}] });
+        const w = await handle.createWritable(); await w.write(new Blob([data],{type:"application/json"})); await w.close(); notify("Preset saved as file."); return;
+      }
+    } catch(err){ console.warn("picker fail; fallback", err); }
     try { const blob = new Blob([data],{type:"application/json"}); const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`digitizer_preset_${Date.now()}.json`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); notify("Download started."); } catch { notify("Download blocked", "err"); }
   };
-  const loadPresetFromFile = (file: File | null) => { if(!file) return; const fr = new FileReader(); fr.onload = () => { try { applyPreset(JSON.parse(String(fr.result||"{}"))); notify("Preset loaded."); } catch { notify("Invalid preset", "err"); } }; fr.readAsText(file); };
-  const copyShareURL = () => { try { const enc = btoa(unescape(encodeURIComponent(JSON.stringify(serialize())))); const url = `${location.origin}${location.pathname}#s=${enc}`; navigator.clipboard?.writeText(url); notify("Share URL copied!"); } catch { notify("Copy failed", "err"); } };
+  const loadPresetFromFile = (file: File | null) => {
+    if(!file) return; const fr = new FileReader();
+    fr.onload = () => { try { applyPreset(JSON.parse(String(fr.result||"{}"))); notify("Preset loaded."); } catch { notify("Invalid preset", "err"); } };
+    fr.readAsText(file);
+  };
+  const copyShareURL = () => { try {
+    const enc = btoa(unescape(encodeURIComponent(JSON.stringify(serialize()))));
+    const url = `${location.origin}${location.pathname}#s=${enc}`;
+    navigator.clipboard?.writeText(url); notify("Share URL copied!");
+  } catch { notify("Copy failed", "err"); } };
 
-  // 자동 저장
+  // 자동 저장/복원
   useEffect(()=>{ try { localStorage.setItem("digitizer:auto", JSON.stringify(serialize())); } catch {} },
-    [size,pad,xMin,xMax,yMin,yMax,xLog,yLog,series,activeSeries,connectLines,lineWidth,lineAlpha,smoothLines,smoothAlpha,keepAspect,anchorMode,customAnchors,activeBg,showAB,opacityAB,bgXform,guideXs,guideYs]);
+    [xMin,xMax,yMin,yMax,xLog,yLog,series,activeSeries,connectLines,lineWidth,lineAlpha,smoothLines,smoothAlpha,keepAspect,anchorMode,customAnchors,activeBg,showAB,opacityAB,bgXform,guideXs,guideYs,showCrossFromX,showCrossFromY]);
   useEffect(()=>{ const h=location.hash||""; if(h.startsWith("#s=")){ try{ applyPreset(JSON.parse(decodeURIComponent(escape(atob(h.slice(3)))))); return; }catch{} } try{ const raw=localStorage.getItem("digitizer:auto"); if(raw) applyPreset(JSON.parse(raw)); }catch{} }, []);
 
-  /* ==== Simple internal tests ==== */
-  useEffect(()=>{ const ok=[clampS(0),clampS(0.05),clampS(0.5),clampS(1),clampS(5),clampS(100)]; if(!(ok[0]===0.05&&ok[1]===0.05&&ok[2]===0.5&&ok[3]===1&&ok[4]===5&&ok[5]===50)) console.warn("TEST FAIL clamp"); const r=innerRect(), mid={x:r.x+r.w/2,y:r.y+r.h/2}, back=pixelToData(mid.x,mid.y), fwd=dataToPixel(back.x,back.y), err=Math.hypot(fwd.px-mid.x,fwd.py-mid.y); if(err>1) console.warn("TEST WARN round-trip",err); }, [xLog,yLog,xMin,xMax,yMin,yMax,size,pad]);
-
-  /* ==== UI (기존 레이아웃 유지) ==== */
+  /* ==== UI ==== */
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white p-6 text-gray-900">
       <h1 className="mb-3 text-3xl font-semibold tracking-tight">Log-scale Graph Digitizer</h1>
 
+      {/* 상단 툴바: 정렬 통일 */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
+        <button onClick={savePresetFile} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Save preset (JSON)</button>
+        <button onClick={()=> presetFileRef.current?.click()} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Load preset (file)</button>
+        <input ref={presetFileRef} type="file" accept="application/json" style={{display:"none"}} aria-hidden="true" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) loadPresetFromFile(f); (e.target as any).value=""; }} />
+        <button onClick={copyShareURL} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Copy URL</button>
+        <span className="mx-2 hidden h-5 w-px bg-gray-200 md:inline-block" />
+        <button onClick={()=>{ let out = "series,x,y\n"; series.forEach(s=> s.points.forEach(p=> out += `${s.name},${p.x},${p.y}\n`)); const url = URL.createObjectURL(new Blob([out],{type:"text/csv"})); const a=document.createElement("a"); a.href=url; a.download=`points_${Date.now()}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Export CSV</button>
+        <button onClick={()=>{ const c = canvasRef.current; if(!c) return; const url=c.toDataURL("image/png"); const a=document.createElement("a"); a.href=url; a.download=`digitizer_${Date.now()}.png`; a.click(); }} className="rounded-xl bg-blue-600 px-3 py-1 text-white hover:bg-blue-700">Export PNG</button>
+      </div>
+
+      {/* 캔버스 */}
       <div className="inline-block rounded-2xl border border-gray-200 bg-white p-3 shadow-lg">
         <canvas
           ref={canvasRef}
           width={size.w}
           height={size.h}
-          className="touch-none select-none"
+          className="touch-none select-none block"
           style={{ cursor: pickAnchor ? "crosshair" : (bgEditMode ? (hoverHandle !== "none" ? "nwse-resize" : "move") : "crosshair") }}
           onMouseMove={onMouseMove}
           onMouseDown={onMouseDown}
-          onMouseUp={onMouseUp}
-          onMouseLeave={onMouseLeave}
-          onWheel={onWheel}
+          onMouseUp={()=>{ dragRef.current.active=false; resizeRef.current.active=false; setTick(t => (t + 1) & 0xffff); }}
+          onMouseLeave={()=>{ hoverRef.current={x:null,y:null}; setHoverHandle("none"); dragRef.current.active=false; resizeRef.current.active=false; setTick(t => (t + 1) & 0xffff); }}
+          onWheel={(e)=>{ if (!bgEditMode) return; e.preventDefault(); const k = e.deltaY < 0 ? 1.05 : 0.95; setBgXform((cur)=>{ const n=[...cur] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf,sx:nsx,sy:keepAspect?nsx:nsy}; return n; }); setTick(t => (t + 1) & 0xffff); }}
           onDragOver={(e)=>e.preventDefault()}
           onDrop={(e)=>{ e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg); }}
           onContextMenu={(e)=>{ e.preventDefault(); if(pickAnchor) setPickAnchor(false); }}
         />
       </div>
 
-      {/* 상단 상태/툴바 */}
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-700">
-        <div>
+      {/* 상태줄: 커서/가이드 결과 */}
+      <div className="mt-2 grid items-center gap-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm text-gray-700 shadow-sm md:grid-cols-2">
+        <div className="truncate">
           {hoverRef.current.x !== null && hoverRef.current.y !== null ? (() => {
             const cx = hoverRef.current.x!, cy = hoverRef.current.y!;
             const xs = series.map(s => `${s.name}:${fmtReal(yAtX(s.points, cx))}`).join("  |  ");
             const ys = series.map(s => `${s.name}:${fmtReal(xAtY(s.points, cy))}`).join("  |  ");
             return (
-              <span>
+              <span className="block truncate">
                 Cursor · X={fmtReal(cx)} , Y={fmtReal(cy)}
-                <span className="ml-3 text-gray-600">At X → {xs}</span>
-                <span className="ml-3 text-gray-600">At Y → {ys}</span>
+                <span className="ml-2 text-gray-600">At X → {xs}</span>
+                <span className="ml-2 text-gray-600">At Y → {ys}</span>
               </span>
             );
-          })() : (
-            <span>Cursor: -</span>
-          )}
+          })() : (<span>Cursor: -</span>)}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:s.points.slice(0,Math.max(0,s.points.length-1)) }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Undo</button>
-          <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:[] }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Clear</button>
-          <button onClick={()=>{ let out = "series,x,y\n"; series.forEach(s=> s.points.forEach(p=> out += `${s.name},${p.x},${p.y}\n`)); const url = URL.createObjectURL(new Blob([out],{type:"text/csv"})); const a=document.createElement("a"); a.href=url; a.download=`points_${Date.now()}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Export CSV</button>
-          <button onClick={()=>{ const c = canvasRef.current; if(!c) return; const url=c.toDataURL("image/png"); const a=document.createElement("a"); a.href=url; a.download=`digitizer_${Date.now()}.png`; a.click(); }} className="rounded-xl bg-blue-600 px-3 py-1 text-white hover:bg-blue-700">Export PNG</button>
-          <span className="mx-1 h-5 w-px bg-gray-200" />
-          <button onClick={savePresetFile} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Save preset (JSON)</button>
-          <button onClick={()=> presetFileRef.current?.click()} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Load preset (file)</button>
-          <input ref={presetFileRef} type="file" accept="application/json" style={{display:"none"}} aria-hidden="true" onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) loadPresetFromFile(f); (e.target as any).value=""; }} />
-          <button onClick={copyShareURL} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Copy URL</button>
-          <button onClick={()=>{ setXMin(10); setXMax(1_000_000); setYMin(0.0001); setYMax(1_000_000); setXLog(true); setYLog(true); notify("Axes reset"); }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Reset Axes</button>
-          <button onClick={()=>{ try{ localStorage.removeItem("digitizer:auto"); location.hash=""; notify("Hard reset done"); }catch{} }} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Hard Reset</button>
+
+        {/* 가이드 입력들 */}
+        <div className="flex flex-wrap items-center gap-3 justify-end">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">Guide X</span>
+            <input className="w-28 rounded border px-2 py-1" placeholder="예: 1000"
+              value={guideInput}
+              onChange={(e)=>{ setGuideInput(e.target.value); const v=Number(e.target.value); setInlineX(isFinite(v)&&v>0? v:null); }}
+              onKeyDown={(e)=>{ if(e.key==="Enter"){ const v=Number(guideInput); if(isFinite(v)&&v>0) { setGuideXs(g=> Array.from(new Set([...g, v]))); setInlineX(v);} } }}
+            />
+            <button className="rounded bg-gray-100 px-2 py-1 hover:bg-gray-200" onClick={()=>{ const v=Number(guideInput); if(isFinite(v)&&v>0) { setGuideXs(g=> Array.from(new Set([...g, v]))); setInlineX(v);} }}>Add</button>
+            <button className="rounded bg-gray-100 px-2 py-1 hover:bg-gray-200" onClick={()=>{ setGuideXs([]); setInlineX(null); setGuideInput(""); }}>Clear</button>
+            <button className="rounded bg-gray-100 px-2 py-1 hover:bg-gray-200" onClick={()=>{ if(hoverRef.current.x!==null){ const v=hoverRef.current.x!; setGuideXs(g=> Array.from(new Set([...g, v]))); setInlineX(v); setGuideInput(String(v)); }}}>From Cursor</button>
+            <label className="ml-2 flex items-center gap-1"><input type="checkbox" checked={showCrossFromX} onChange={(e)=>setShowCrossFromX(e.target.checked)} /> Cross lines</label>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium">Guide Y</span>
+            <input className="w-28 rounded border px-2 py-1" placeholder="예: 10"
+              value={guideYInput}
+              onChange={(e)=>{ setGuideYInput(e.target.value); const v=Number(e.target.value); setInlineY(isFinite(v)&&v>0? v:null); }}
+              onKeyDown={(e)=>{ if(e.key==="Enter"){ const v=Number(guideYInput); if(isFinite(v)&&v>0) { setGuideYs(g=> Array.from(new Set([...g, v]))); setInlineY(v);} } }}
+            />
+            <button className="rounded bg-gray-100 px-2 py-1 hover:bg-gray-200" onClick={()=>{ const v=Number(guideYInput); if(isFinite(v)&&v>0) { setGuideYs(g=> Array.from(new Set([...g, v]))); setInlineY(v);} }}>Add</button>
+            <button className="rounded bg-gray-100 px-2 py-1 hover:bg-gray-200" onClick={()=>{ setGuideYs([]); setInlineY(null); setGuideYInput(""); }}>Clear</button>
+            <button className="rounded bg-gray-100 px-2 py-1 hover:bg-gray-200" onClick={()=>{ if(hoverRef.current.y!==null){ const v=hoverRef.current.y!; setGuideYs(g=> Array.from(new Set([...g, v]))); setInlineY(v); setGuideYInput(String(v)); }}}>From Cursor</button>
+            <label className="ml-2 flex items-center gap-1"><input type="checkbox" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross lines</label>
+          </div>
         </div>
       </div>
 
-      {/* Guide X 줄 */}
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-        <span className="font-medium">Guide X:</span>
-        <input
-          placeholder="예: 1000"
-          value={guideInput}
-          onChange={(e)=> { setGuideInput(e.target.value); const v = Number(e.target.value); setInlineX(isFinite(v) && v>0 ? v : null); }}
-          onKeyDown={(e)=> { if (e.key === "Enter") { const v = Number(guideInput); if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); } } }}
-          className="rounded border px-2 py-1 w-28"
-        />
-        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{ const v = Number(guideInput); if (isFinite(v) && v>0) { setGuideXs(g => Array.from(new Set([...g, v]))); setInlineX(v); } }}>
-          Add
-        </button>
-        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{ setGuideXs([]); setInlineX(null); setGuideInput(""); }}>
-          Clear
-        </button>
-        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{ if (hoverRef.current.x!==null){ const v=hoverRef.current.x!; setGuideXs(g=> Array.from(new Set([...g, v]))); setInlineX(v); setGuideInput(String(v)); }}}>
-          Add from Cursor
-        </button>
-        <span className="text-gray-600">
-          {inlineX!==null ? <>X=<b className="font-mono">{fmtReal(inlineX)}</b> → {inlineLabelForX(inlineX)}</> : <span className="text-gray-400">(값 입력 후 Enter/추가)</span>}
-        </span>
-      </div>
-
-      {/* Guide Y 줄 */}
-      <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-        <span className="font-medium">Guide Y:</span>
-        <input
-          placeholder="예: 10"
-          value={guideYInput}
-          onChange={(e)=> { setGuideYInput(e.target.value); const v = Number(e.target.value); setInlineY(isFinite(v) && v>0 ? v : null); }}
-          onKeyDown={(e)=> { if (e.key === "Enter") { const v = Number(guideYInput); if (isFinite(v) && v>0) { setGuideYs(g => Array.from(new Set([...g, v]))); setInlineY(v); } } }}
-          className="rounded border px-2 py-1 w-28"
-        />
-        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{ const v = Number(guideYInput); if (isFinite(v) && v>0) { setGuideYs(g => Array.from(new Set([...g, v]))); setInlineY(v); } }}>
-          Add
-        </button>
-        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{ setGuideYs([]); setInlineY(null); setGuideYInput(""); }}>
-          Clear
-        </button>
-        <button className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200"
-          onClick={()=>{ if (hoverRef.current.y!==null){ const v=hoverRef.current.y!; setGuideYs(g=> Array.from(new Set([...g, v]))); setInlineY(v); setGuideYInput(String(v)); }}}>
-          Add from Cursor
-        </button>
-        <span className="text-gray-600">
-          {inlineY!==null ? <>Y=<b className="font-mono">{fmtReal(inlineY)}</b> → {inlineLabelForY(inlineY)}</> : <span className="text-gray-400">(값 입력 후 Enter/추가)</span>}
-        </span>
-      </div>
-
-      {/* 하단 카드들 */}
+      {/* 컨트롤 카드 */}
       <div className="mt-4 grid gap-5 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg md:grid-cols-2">
         <section>
           <h2 className="mb-2 font-semibold">Axes</h2>
-          <div className="mb-1 flex items-center gap-3 text-sm">
+          <div className="mb-2 flex items-center gap-4 text-sm">
             <label className="flex items-center gap-1"><input type="checkbox" checked={xLog} onChange={(e)=>setXLog(e.target.checked)} /> X Log10</label>
             <label className="flex items-center gap-1"><input type="checkbox" checked={yLog} onChange={(e)=>setYLog(e.target.checked)} /> Y Log10</label>
           </div>
@@ -712,16 +673,17 @@ export default function App() {
 
         <section>
           <h2 className="mb-2 font-semibold">Series</h2>
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+          <div className="mb-3 flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===0} onChange={()=>setActiveSeries(0)} /> Series A</label>
             <label className="flex items-center gap-1"><input type="radio" name="series" checked={activeSeries===1} onChange={()=>setActiveSeries(1)} /> Series B</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect (default on)</label>
+            <label className="flex items-center gap-1"><input type="checkbox" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect</label>
           </div>
-          {/* 시리즈 이름 입력 */}
-          <div className="grid grid-cols-2 gap-2 text-sm mb-2">
+
+          <div className="mb-3 grid grid-cols-2 gap-2 text-sm">
             <label className="flex items-center gap-1">Series A name <input className="w-full rounded border px-2 py-1" value={series[0].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===0? {...s, name:e.target.value}: s))} /></label>
             <label className="flex items-center gap-1">Series B name <input className="w-full rounded border px-2 py-1" value={series[1].name} onChange={(e)=> setSeries(arr => arr.map((s,i)=> i===1? {...s, name:e.target.value}: s))} /></label>
           </div>
+
           <div className="grid grid-cols-3 gap-2 text-sm">
             <label className="flex items-center gap-1">Width <input className="w-full rounded border px-2 py-1" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
             <label className="col-span-2 flex items-center gap-2">Alpha <input type="range" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} className="w-full" /> <span>{lineAlpha.toFixed(2)}</span></label>
@@ -732,15 +694,21 @@ export default function App() {
             <label className="flex items-center gap-2 col-span-3"><input type="checkbox" checked={showPoints} onChange={(e)=>setShowPoints(e.target.checked)} /> Show points</label>
             <label className="flex items-center gap-2 col-span-3">Point size <input type="range" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} className="w-full" /> <span>{ptRadius}px</span></label>
           </div>
+
+          {/* Undo / Clear (이 섹션 하단) */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:s.points.slice(0,Math.max(0,s.points.length-1)) }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Undo</button>
+            <button onClick={()=> setSeries(arr=> arr.map((s,i)=> i===activeSeries? { ...s, points:[] }: s))} className="rounded-xl bg-gray-100 px-3 py-1 hover:bg-gray-200">Clear</button>
+          </div>
         </section>
 
-        <section>
+        <section className="md:col-span-2">
           <h2 className="mb-2 font-semibold">Image A/B</h2>
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+          <div className="mb-2 flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2"><input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} /> Magnifier</label>
             <label className="flex items-center gap-2">Zoom <input type="range" min={2} max={8} step={1} value={magnifyFactor} onChange={(e)=>setMagnifyFactor(Number(e.target.value))} /></label>
           </div>
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+          <div className="mb-2 flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-1"><input type="radio" name="activebg" checked={activeBg===0} onChange={()=>setActiveBg(0)} /> Edit A</label>
             <label className="flex items-center gap-1"><input type="radio" name="activebg" checked={activeBg===1} onChange={()=>setActiveBg(1)} /> Edit B</label>
             <span className="mx-1 h-4 w-px bg-gray-200" />
@@ -753,9 +721,9 @@ export default function App() {
             <button onClick={()=> fileARef.current?.click()} className="rounded-lg border px-2 py-1">Load A</button>
             <button onClick={()=> fileBRef.current?.click()} className="rounded-lg border px-2 py-1">Load B</button>
             <input ref={fileARef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
-            onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
-             <input ref={fileBRef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
-             onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
+              onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,0); (e.target as any).value=""; }} />
+            <input ref={fileBRef} type="file" accept="image/*" style={{display:"none"}} aria-hidden="true"
+              onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) onFile(f,1); (e.target as any).value=""; }} />
             <span className="mx-1 h-4 w-px bg-gray-200" />
             <button onClick={()=> setBgEditMode(v=>!v)} className={`rounded-lg px-2 py-1 ${bgEditMode?"bg-amber-100 border border-amber-300":"border"}`}>{bgEditMode?"BG Edit ON":"BG Edit OFF"}</button>
             <label className="flex items-center gap-1"><input type="checkbox" checked={keepAspect} onChange={(e)=>setKeepAspect(e.target.checked)} /> Keep ratio</label>
