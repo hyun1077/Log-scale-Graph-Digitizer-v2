@@ -370,23 +370,42 @@ export default function App() {
     setHoverHandle(bgEditMode ? pickHandle(px, py) : "none");
     setTick(t => (t + 1) & 0xffff);
   };
+  // ⛑️ 이 함수 전체를 복사해서 붙여넣으세요.
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e);
     if (e.button === 2) { setPickAnchor(false); return; }
+    
     if (pickAnchor && overImage(px, py)) {
-        const lr = lastRectRef.current; if (!lr) return; const fx = (px - lr.x) / lr.w, fy = (py - lr.y) / lr.h;
-        setCustomAnchors((cur) => { const n = [...cur] as [CustomAnchor, CustomAnchor]; n[activeBg] = { ax: px, ay: py, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) }; return n; });
-        setAnchorMode("custom"); setPickAnchor(false); return;
+      const lr = lastRectRef.current; if (!lr) return;
+      const fx = (px - lr.x) / lr.w;
+      const fy = (py - lr.y) / lr.h;
+      setCustomAnchors((cur) => {
+        const n = [...cur] as [CustomAnchor, CustomAnchor];
+        n[activeBg] = { ax: px, ay: py, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) };
+        return n;
+      });
+      setAnchorMode("custom");
+      setPickAnchor(false);
+      return;
     }
+  
     if (bgEditMode) {
-        const h = pickHandle(px, py);
-        if (h !== "none") { const d = drawRectAndAnchor(activeBg); resizeRef.current = { active: true, mode: h, ax: d.ax, ay: d.ay, fx: d.fx, fy: d.fy, baseW: d.baseW, baseH: d.baseH }; return; }
-        if (overImage(px, py)) { dragRef.current = { active: true, startX: px, startY: py, baseX: bgXform[activeBg].offX, baseY: bgXform[activeBg].offY }; return; }
+      const h = pickHandle(px, py);
+      if (h !== "none") {
+        // 리사이즈 핸들을 클릭한 경우 -> 리사이즈 시작
+        const d = drawRectAndAnchor(activeBg);
+        resizeRef.current = { active: true, mode: h, ax: d.ax, ay: d.ay, fx: d.fx, fy: d.fy, baseW: d.baseW, baseH: d.baseH };
         return;
+      }
+      // 👇 변경된 부분: overImage 검사를 제거하고 바로 드래그를 시작합니다.
+      // 리사이즈 핸들이 아니라면 무조건 드래그를 시작합니다.
+      dragRef.current = { active: true, startX: px, startY: py, baseX: bgXform[activeBg].offX, baseY: bgXform[activeBg].offY };
+      return;
     }
+  
     if (inPlot(px, py)) {
-        const d = pixelToData(px, py);
-        setSeries((arr) => arr.map((s, i) => i === activeSeries ? { ...s, points: [...s.points, { x: d.x, y: d.y }] } : s));
+      const d = pixelToData(px, py);
+      setSeries((arr) => arr.map((s, i) => i === activeSeries ? { ...s, points: [...s.points, { x: d.x, y: d.y }] } : s));
     }
   };
   const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
