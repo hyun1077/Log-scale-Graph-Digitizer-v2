@@ -37,6 +37,10 @@ jobs:
           npm ci || npm install --no-fund --no-audit
           npm run build
 
+      - name: Add SPA fallback
+        working-directory: log-digitizer-vite
+        run: cp dist/index.html dist/404.html
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
