@@ -1280,7 +1280,7 @@ export default function App() {
     <div className="min-h-screen bg-gray-100 text-gray-800 font-sans antialiased">
       {/* Header */}
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/80 p-4 backdrop-blur-sm">
-        <h1 className="text-xl font-bold text-gray-900">Log-scale Graph Digitizer</h1>
+        <h1 className="text-xl font-bold text-gray-900">Log-scale Graph Digitizer v2</h1>
         <div className="flex flex-wrap items-center gap-3 text-base">
           <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:s.points.slice(0,-1)}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300">Undo Last Point</button>
           <button onClick={() => updateState(p=>({...p, series:p.series.map((s,i)=>i===activeSeries?{...s, points:[]}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active Series</button>
