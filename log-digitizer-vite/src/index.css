@@ -1,7 +1,10 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+html, body, #root {
+  height: 100%;
+}
 
-/* (선택) 전체 배경/폰트 살짝 다듬기 */
-html, body, #root { height: 100%; }
-body { @apply bg-gray-100 text-gray-800; }
+body {
+  margin: 0;
+  background-color: #f3f4f6; /* gray-100 */
+  color: #1f2937; /* gray-800 */
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}

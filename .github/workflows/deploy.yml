@@ -28,11 +28,22 @@ jobs:
           cache: 'npm'
           cache-dependency-path: log-digitizer-vite/package-lock.json
 
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
       - name: Install & Build (Vite)
         working-directory: log-digitizer-vite
         run: |
           npm ci || npm install --no-fund --no-audit
           npm run build
+
+      - name: Add SPA fallback
+        working-directory: log-digitizer-vite
+        run: cp dist/index.html dist/404.html
+
+      - name: Disable Jekyll processing
+        working-directory: log-digitizer-vite
+        run: touch dist/.nojekyll
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
