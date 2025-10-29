@@ -1,0 +1,39 @@
+name: Build and publish to /docs (no local)
+
+on:
+  push:
+    branches: [ main ]     # ← 배포를 트리거할 브랜치
+  workflow_dispatch:
+
+permissions:
+  contents: write          # /docs에 커밋하려면 write 권한 필요
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci || npm i --no-fund --no-audit
+
+      - name: Build (Vite)
+        run: npm run build
+
+      - name: SPA 404 fallback
+        run: cp dist/index.html dist/404.html
+
+      - name: Publish to /docs
+        run: |
+          rm -rf docs
+          mkdir -p docs
+          cp -r dist/* docs/
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: publish to /docs" || echo "No changes"
+          git push
