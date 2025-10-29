@@ -38,6 +38,7 @@ const AccordionSection = ({ title, children, isOpen, onToggle }) => (
 export default function App() {
   /* ==== Refs / UI ==== */
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const i2tCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileARef = useRef<HTMLInputElement | null>(null);
   const fileBRef = useRef<HTMLInputElement | null>(null);
   const presetFileRef = useRef<HTMLInputElement | null>(null);
@@ -944,7 +945,7 @@ export default function App() {
       for (const gx of guideXs) {
         const gp = dataToPixel(gx, 1); ctx.strokeStyle = "#EF4444";
         ctx.beginPath(); ctx.moveTo(gp.px, rr.y); ctx.lineTo(gp.px, rr.y + rr.h); ctx.stroke();
-        allSeries.forEach((s) => {
+        baseSeries.forEach((s) => {
           const y = yAtX(s.points, gx); if (y == null) return;
           const P = dataToPixel(gx, y);
           if (showCrossFromX) { ctx.strokeStyle = "rgba(239,68,68,0.5)"; ctx.beginPath(); ctx.moveTo(rr.x, P.py); ctx.lineTo(rr.x + rr.w, P.py); ctx.stroke(); }
@@ -960,7 +961,7 @@ export default function App() {
       for (const gy of guideYs) {
         const gp = dataToPixel(1, gy); ctx.strokeStyle = "#3B82F6";
         ctx.beginPath(); ctx.moveTo(rr.x, gp.py); ctx.lineTo(rr.x + rr.w, gp.py); ctx.stroke();
-        allSeries.forEach((s) => {
+        baseSeries.forEach((s) => {
           const x = xAtY(s.points, gy); if (x == null) return;
           const P = dataToPixel(x, gy);
           if (showCrossFromY) { ctx.strokeStyle = "rgba(59,130,246,0.5)"; ctx.beginPath(); ctx.moveTo(P.px, rr.y); ctx.lineTo(P.px, rr.y + rr.h); ctx.stroke(); }
@@ -974,7 +975,7 @@ export default function App() {
     if (connectLines) {
       const rr = innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x, rr.y, rr.w, rr.h); ctx.clip();
       ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
-      for (const s of allSeries) {
+      for (const s of baseSeries) {
         if (s.points.length < 2) continue; const pxPts = s.points.map(p => dataToPixel(p.x, p.y));
         ctx.strokeStyle = s.color; ctx.beginPath();
         if (smoothLines && pxPts.length >= 2) catmullRomPath(ctx, pxPts, smoothAlpha);
@@ -986,7 +987,7 @@ export default function App() {
 
     // Points
     if (showPoints) {
-      allSeries.forEach((s, si) => {
+      baseSeries.forEach((s, si) => {
         ctx.fillStyle = s.color; ctx.strokeStyle = "#fff";
         s.points.forEach((p, pi) => {
           const P = dataToPixel(p.x, p.y);
@@ -1009,7 +1010,7 @@ export default function App() {
     ctx.save();
     const rr2 = innerRect(); ctx.font = "600 16px ui-sans-serif, system-ui";
     let lx = rr2.x + 10, ly = rr2.y + 20; const box = 12, gap = 10;
-    allSeries.forEach((s, i) => {
+    baseSeries.forEach((s, i) => {
       ctx.fillStyle = s.color; ctx.fillRect(lx, ly - box + 2, box, box);
       ctx.fillStyle = "#0f172a"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
       const suffix = s.derived ? "  ⧉" : i === activeSeries ? "  ◀" : "";
@@ -1034,6 +1035,274 @@ export default function App() {
     currentState, activeBg, showAB, opacityAB, keepAspect, anchorMode, pickAnchor, hoverHandle,
     showPoints, connectLines, lineAlpha, lineWidth, smoothLines, smoothAlpha, ptRadius,
     guideXs, guideYs, showCrossFromX, showCrossFromY, magnifyOn, magnifyFactor, selectedPoint, tick
+  ]);
+
+  useEffect(() => {
+    if (!currentState) return;
+    const canvas = i2tCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, size.w, size.h);
+    ctx.fillStyle = "#F9FAFB";
+    ctx.fillRect(0, 0, size.w, size.h);
+
+    const r = innerRect();
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+
+    if (!convertedSeries.length) {
+      ctx.fillStyle = "#9CA3AF";
+      ctx.font = "16px ui-sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Generate I²T curves to preview them here.", size.w / 2, r.y + r.h / 2);
+      return;
+    }
+
+    const xLog = currentState.xLog;
+    const yLog = currentState.yLog;
+
+    const xs = convertedSeries
+      .flatMap(s => s.points.map(p => p.x))
+      .filter(v => Number.isFinite(v) && (!xLog || v > 0));
+    const ys = convertedSeries
+      .flatMap(s => s.points.map(p => p.y))
+      .filter(v => Number.isFinite(v) && (!yLog || v > 0));
+
+    let xMin = xs.length ? Math.min(...xs) : currentState.xMin;
+    let xMax = xs.length ? Math.max(...xs) : currentState.xMax;
+    let yMin = ys.length ? Math.min(...ys) : 1;
+    let yMax = ys.length ? Math.max(...ys) : 10;
+
+    if (!Number.isFinite(xMin) || !Number.isFinite(xMax)) {
+      xMin = currentState.xMin;
+      xMax = currentState.xMax;
+    }
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
+      yMin = 1;
+      yMax = 10;
+    }
+
+    if (xLog) {
+      xMin = Math.max(EPS, xMin);
+      xMax = Math.max(xMin * 1.0001, xMax);
+    } else {
+      const xr = xMax - xMin || Math.abs(xMin) || 1;
+      xMin -= xr * 0.05;
+      xMax += xr * 0.05;
+    }
+
+    if (yLog) {
+      yMin = Math.max(EPS, yMin);
+      yMax = Math.max(yMin * 1.0001, yMax);
+    } else {
+      const yr = yMax - yMin || Math.abs(yMin) || 1;
+      yMin -= yr * 0.05;
+      yMax += yr * 0.05;
+    }
+
+    const mm = {
+      xmin: tVal(xMin, xLog),
+      xmax: tVal(xMax, xLog),
+      ymin: tVal(yMin, yLog),
+      ymax: tVal(yMax, yLog),
+    };
+
+    const expand = (min: number, max: number) => {
+      if (!isFinite(min) || !isFinite(max)) return { min: 0, max: 1 };
+      if (Math.abs(max - min) < EPS) return { min: min - 1, max: max + 1 };
+      return { min, max };
+    };
+
+    const xm = expand(mm.xmin, mm.xmax);
+    const ym = expand(mm.ymin, mm.ymax);
+    mm.xmin = xm.min;
+    mm.xmax = xm.max;
+    mm.ymin = ym.min;
+    mm.ymax = ym.max;
+
+    const dataToPixelDerived = (x: number, y: number) => {
+      const tx = tVal(x, xLog);
+      const ty = tVal(y, yLog);
+      return {
+        px: r.x + ((tx - mm.xmin) / (mm.xmax - mm.xmin)) * r.w,
+        py: r.y + r.h - ((ty - mm.ymin) / (mm.ymax - mm.ymin)) * r.h,
+      };
+    };
+
+    ctx.save();
+    ctx.strokeStyle = "#E5E7EB";
+    ctx.fillStyle = "#6B7280";
+    ctx.lineWidth = 1;
+    ctx.font = "12px ui-sans-serif";
+
+    if (xLog) {
+      const start = Math.floor(Math.log10(xMin));
+      const end = Math.ceil(Math.log10(xMax));
+      for (let n = start; n <= end; n++) {
+        const base = Math.pow(10, n);
+        const px = dataToPixelDerived(base, yMin).px;
+        ctx.beginPath();
+        ctx.moveTo(px, r.y);
+        ctx.lineTo(px, r.y + r.h);
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.fillText(pow10Label(n), px, r.y + r.h + 18);
+        for (let m = 2; m < 10; m++) {
+          const minor = base * m;
+          if (minor >= xMax) break;
+          if (minor <= xMin) continue;
+          const mp = dataToPixelDerived(minor, yMin).px;
+          ctx.save();
+          ctx.strokeStyle = "#F3F4F6";
+          ctx.beginPath();
+          ctx.moveTo(mp, r.y);
+          ctx.lineTo(mp, r.y + r.h);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    } else {
+      const steps = 10;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = xMin + t * (xMax - xMin);
+        const px = dataToPixelDerived(x, yMin).px;
+        ctx.beginPath();
+        ctx.moveTo(px, r.y);
+        ctx.lineTo(px, r.y + r.h);
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.fillText(numFmt(x, (xMax - xMin) / 10), px, r.y + r.h + 18);
+      }
+    }
+
+    if (yLog) {
+      const start = Math.floor(Math.log10(yMin));
+      const end = Math.ceil(Math.log10(yMax));
+      for (let n = start; n <= end; n++) {
+        const base = Math.pow(10, n);
+        const py = dataToPixelDerived(xMin, base).py;
+        ctx.beginPath();
+        ctx.moveTo(r.x, py);
+        ctx.lineTo(r.x + r.w, py);
+        ctx.stroke();
+        ctx.textAlign = "right";
+        ctx.fillText(pow10Label(n), r.x - 6, py + 4);
+        for (let m = 2; m < 10; m++) {
+          const minor = base * m;
+          if (minor >= yMax) break;
+          if (minor <= yMin) continue;
+          const mp = dataToPixelDerived(xMin, minor).py;
+          ctx.save();
+          ctx.strokeStyle = "#F3F4F6";
+          ctx.beginPath();
+          ctx.moveTo(r.x, mp);
+          ctx.lineTo(r.x + r.w, mp);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    } else {
+      const steps = 10;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const y = yMin + t * (yMax - yMin);
+        const py = dataToPixelDerived(xMin, y).py;
+        ctx.beginPath();
+        ctx.moveTo(r.x, py);
+        ctx.lineTo(r.x + r.w, py);
+        ctx.stroke();
+        ctx.textAlign = "right";
+        ctx.fillText(numFmt(y, (yMax - yMin) / 10), r.x - 6, py + 4);
+      }
+    }
+
+    ctx.restore();
+
+    if (connectLines) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.clip();
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.globalAlpha = lineAlpha;
+      ctx.lineWidth = lineWidth;
+      convertedSeries.forEach(series => {
+        if (series.points.length < 2) return;
+        const pts = series.points.map(pt => dataToPixelDerived(pt.x, pt.y));
+        ctx.strokeStyle = series.color;
+        ctx.beginPath();
+        if (smoothLines && pts.length >= 2) catmullRomPath(ctx, pts, smoothAlpha);
+        else {
+          ctx.moveTo(pts[0].px, pts[0].py);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].px, pts[i].py);
+        }
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    if (showPoints) {
+      convertedSeries.forEach(series => {
+        ctx.fillStyle = series.color;
+        ctx.strokeStyle = "#fff";
+        series.points.forEach(pt => {
+          const P = dataToPixelDerived(pt.x, pt.y);
+          ctx.beginPath();
+          ctx.arc(P.px, P.py, ptRadius, 0, Math.PI * 2);
+          ctx.fill();
+          if (ptRadius >= 3) {
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        });
+      });
+    }
+
+    ctx.strokeStyle = "#374151";
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+    ctx.fillStyle = "#111827";
+    ctx.font = "14px ui-sans-serif, system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText(xLog ? "Time (10^n)" : "Time", r.x + r.w / 2, r.y + r.h + 34);
+    ctx.save();
+    ctx.translate(r.x - 52, r.y + r.h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(yLog ? "I²T (10^n)" : "I²T", 0, 0);
+    ctx.restore();
+
+    ctx.save();
+    ctx.font = "600 16px ui-sans-serif, system-ui";
+    let lx = r.x + 10;
+    let ly = r.y + 20;
+    const box = 12;
+    const gap = 10;
+    convertedSeries.forEach(series => {
+      ctx.fillStyle = series.color;
+      ctx.fillRect(lx, ly - box + 2, box, box);
+      ctx.fillStyle = "#0f172a";
+      ctx.textAlign = "left";
+      ctx.fillText(`${series.name} (${series.points.length})`, lx + box + gap, ly + 2);
+      ly += 22;
+    });
+    ctx.restore();
+  }, [
+    convertedSeries,
+    currentState,
+    size,
+    connectLines,
+    lineAlpha,
+    lineWidth,
+    smoothLines,
+    smoothAlpha,
+    showPoints,
+    ptRadius,
   ]);
 
   /* ==== 마우스 ==== */
@@ -1577,32 +1846,89 @@ export default function App() {
         </aside>
 
         {/* Right: Canvas + 좌표 패널 */}
-        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="mb-4 h-6 text-base text-gray-600">
-            {hoverRef.current.x !== null ? (
-              <span className="font-mono">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
-            ) : <span>Hover over the graph area to see coordinates.</span>}
-          </div>
-          <div className="overflow-hidden rounded-lg border border-gray-300">
-            <canvas
-              ref={canvasRef}
-              width={size.w}
-              height={size.h}
-              className="block touch-none select-none"
-              style={{ cursor: cursorForHandle(hoverHandle, bgEditMode, pickAnchor) as any }}
-              onMouseMove={onMouseMove}
-              onMouseDown={onMouseDown}
-              onMouseUp={onMouseUp}
-              onMouseLeave={onMouseLeave}
-              onWheel={(e)=>{ if(!bgEditMode) return; e.preventDefault(); const k = e.deltaY < 0 ? 1.05 : 0.95; updateState(prev=>{const n=[...prev.bgXform] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf, sx: nsx, sy: keepAspect?nsx:nsy}; return {...prev, bgXform:n};}); }}
-              onDragOver={(e)=>e.preventDefault()}
-              onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg);}}
-              onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
-            />
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+              <div className="mb-4 h-6 text-base text-gray-600">
+                {hoverRef.current.x !== null ? (
+                  <span className="font-mono">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
+                ) : <span>Hover over the graph area to see coordinates.</span>}
+              </div>
+              <div className="overflow-hidden rounded-lg border border-gray-300">
+                <canvas
+                  ref={canvasRef}
+                  width={size.w}
+                  height={size.h}
+                  className="block touch-none select-none"
+                  style={{ cursor: cursorForHandle(hoverHandle, bgEditMode, pickAnchor) as any }}
+                  onMouseMove={onMouseMove}
+                  onMouseDown={onMouseDown}
+                  onMouseUp={onMouseUp}
+                  onMouseLeave={onMouseLeave}
+                  onWheel={(e)=>{ if(!bgEditMode) return; e.preventDefault(); const k = e.deltaY < 0 ? 1.05 : 0.95; updateState(prev=>{const n=[...prev.bgXform] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf, sx: nsx, sy: keepAspect?nsx:nsy}; return {...prev, bgXform:n};}); }}
+                  onDragOver={(e)=>e.preventDefault()}
+                  onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg);}}
+                  onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
+                />
+              </div>
+              <p className="mt-4 text-sm text-gray-500">
+                Use the digitizer canvas to capture raw I-T points. Toggle log scales or adjust axes in the sidebar to align with your source chart.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-gray-800">I²T Preview</h3>
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  {convertedSeries.length ? `${convertedSeries.length} curve${convertedSeries.length > 1 ? "s" : ""}` : "No curves"}
+                </span>
+              </div>
+              <p className="mb-4 text-sm text-gray-600">
+                {i2tConfig
+                  ? `Curves are derived from ${baseSeries[i2tConfig.sourceIndex]?.name ?? `Series ${i2tConfig.sourceIndex + 1}`} using X=${fmtReal(i2tConfig.refX)} as the reference point.`
+                  : "Generate I²T curves from the controls to preview the projected degradation alongside your raw data."}
+              </p>
+              <div className="overflow-hidden rounded-lg border border-gray-300">
+                <canvas
+                  ref={i2tCanvasRef}
+                  width={size.w}
+                  height={size.h}
+                  className="block select-none"
+                />
+              </div>
+              {i2tConfig ? (
+                <dl className="mt-4 grid grid-cols-1 gap-3 text-sm text-gray-600 sm:grid-cols-2">
+                  <div>
+                    <dt className="font-semibold text-gray-700">Source series</dt>
+                    <dd>{baseSeries[i2tConfig.sourceIndex]?.name ?? `Series ${i2tConfig.sourceIndex + 1}`}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-gray-700">Reference X</dt>
+                    <dd>{fmtReal(i2tConfig.refX)}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-blue-700">Blue drop</dt>
+                    <dd>{fmtReal(i2tConfig.drops.blue)}%</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-green-700">Green drop</dt>
+                    <dd>{fmtReal(i2tConfig.drops.green)}%</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-red-700">Red drop</dt>
+                    <dd>{fmtReal(i2tConfig.drops.red)}%</dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="mt-4 text-sm text-gray-500">
+                  Configure the drop percentages to visualize blue, green, and red degradation scenarios.
+                </p>
+              )}
+            </div>
           </div>
 
           {/* 좌표 패널 */}
-          <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* Points Table */}
             <div className="rounded-lg border border-gray-200">
               <div className="border-b px-4 py-2 font-semibold text-gray-700">Points</div>
