@@ -41,6 +41,10 @@ jobs:
         working-directory: log-digitizer-vite
         run: cp dist/index.html dist/404.html
 
+      - name: Disable Jekyll processing
+        working-directory: log-digitizer-vite
+        run: touch dist/.nojekyll
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
