@@ -56,8 +56,11 @@ export default function App() {
   // I²t 그래프 관련
   const i2tCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [showI2tGraph, setShowI2tGraph] = useState(true);
-  const [lifetimeCycles, setLifetimeCycles] = useState<number[]>([1, 2, 3, 5, 10, 20]);
-  const [lifetimeRatios, setLifetimeRatios] = useState<number[]>([1, 2, 3, 5, 10, 20]);
+  // 제품 기준 수명모델 파라미터
+  const [lifetimeMode, setLifetimeMode] = useState<"I_mode"|"I2t_mode">("I_mode");
+  const [lifetimeCycles, setLifetimeCycles] = useState<number[]>([1,10,100,1000,10000,100000,1000000]);
+  const [currentMultipliers, setCurrentMultipliers] = useState<number[]>([1.00, 2.80, 2.55, 2.06, 1.70, 1.00, 0.70]);
+  const [lifetimeRatios, setLifetimeRatios] = useState<number[]>([1.000, 0.907, 0.826, 0.713, 0.551, 0.356, 0.227]);
 
   const [activeSeries, setActiveSeries] = useState(0);
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint>(null);
@@ -219,10 +222,10 @@ export default function App() {
       img.onerror = () => notify("이미지 로드 실패", "err");
       img.src = src;
     };
-    const fr = new FileReader();
-    fr.onload = () => finalize(String(fr.result || ""));
+      const fr = new FileReader();
+      fr.onload = () => finalize(String(fr.result || ""));
     fr.onerror = () => { try { finalize(URL.createObjectURL(file)); } catch { notify("이미지 로드 실패", "err"); } };
-    fr.readAsDataURL(file);
+      fr.readAsDataURL(file);
   };
 
   useEffect(() => {
@@ -453,33 +456,33 @@ export default function App() {
     const c = canvasRef.current; if (!c) return;
     const ctx = c.getContext("2d"); if (!ctx) return;
 
-    const r = innerRect();
-    ctx.clearRect(0, 0, size.w, size.h);
-    ctx.fillStyle = "#F9FAFB"; ctx.fillRect(0, 0, size.w, size.h);
-    ctx.fillStyle = "#fff"; ctx.fillRect(r.x, r.y, r.w, r.h);
-    lastRectRef.current = null;
+      const r = innerRect();
+      ctx.clearRect(0, 0, size.w, size.h);
+      ctx.fillStyle = "#F9FAFB"; ctx.fillRect(0, 0, size.w, size.h);
+      ctx.fillStyle = "#fff"; ctx.fillRect(r.x, r.y, r.w, r.h);
+      lastRectRef.current = null;
 
     // Background images
-    for (let i = 0 as 0 | 1; i <= 1; i = ((i + 1) as 0 | 1)) {
+      for (let i = 0 as 0 | 1; i <= 1; i = ((i + 1) as 0 | 1)) {
       const img = bgRefs.current[i]; if (!img || !showAB[i] || opacityAB[i] <= 0) continue;
-      const { dx, dy, dw, dh, ax, ay } = drawRectAndAnchor(i);
+        const { dx, dy, dw, dh, ax, ay } = drawRectAndAnchor(i);
       ctx.globalAlpha = opacityAB[i]; ctx.drawImage(img, dx, dy, dw, dh); ctx.globalAlpha = 1;
-      if (i === activeBg) lastRectRef.current = { x: dx, y: dy, w: dw, h: dh };
-      if (i === activeBg && pickAnchor) {
-        ctx.save(); ctx.strokeStyle = "#F59E0B"; ctx.fillStyle = "#F59E0B";
-        ctx.beginPath(); ctx.arc(ax, ay, 6, 0, Math.PI * 2); ctx.globalAlpha = 0.15; ctx.fill(); ctx.globalAlpha = 1;
-        ctx.beginPath(); ctx.moveTo(ax - 8, ay); ctx.lineTo(ax + 8, ay); ctx.moveTo(ax, ay - 8); ctx.lineTo(ax, ay + 8); ctx.stroke(); ctx.restore();
-      }
+        if (i === activeBg) lastRectRef.current = { x: dx, y: dy, w: dw, h: dh };
+        if (i === activeBg && pickAnchor) {
+          ctx.save(); ctx.strokeStyle = "#F59E0B"; ctx.fillStyle = "#F59E0B";
+          ctx.beginPath(); ctx.arc(ax, ay, 6, 0, Math.PI * 2); ctx.globalAlpha = 0.15; ctx.fill(); ctx.globalAlpha = 1;
+          ctx.beginPath(); ctx.moveTo(ax - 8, ay); ctx.lineTo(ax + 8, ay); ctx.moveTo(ax, ay - 8); ctx.lineTo(ax, ay + 8); ctx.stroke(); ctx.restore();
+        }
       if (i === activeBg && bgEditMode && lastRectRef.current) {
         const lr = lastRectRef.current, H = 12;
         ctx.save();
-        const hs = [
-          { x: lr.x + lr.w, y: lr.y + lr.h / 2, m: "right" as Handle },
-          { x: lr.x, y: lr.y + lr.h / 2, m: "left" as Handle },
-          { x: lr.x + lr.w / 2, y: lr.y, m: "top" as Handle },
-          { x: lr.x + lr.w / 2, y: lr.y + lr.h, m: "bottom" as Handle },
-          { x: lr.x + lr.w, y: lr.y + lr.h, m: "uniform" as Handle },
-        ];
+          const hs = [
+            { x: lr.x + lr.w, y: lr.y + lr.h / 2, m: "right" as Handle },
+            { x: lr.x, y: lr.y + lr.h / 2, m: "left" as Handle },
+            { x: lr.x + lr.w / 2, y: lr.y, m: "top" as Handle },
+            { x: lr.x + lr.w / 2, y: lr.y + lr.h, m: "bottom" as Handle },
+            { x: lr.x + lr.w, y: lr.y + lr.h, m: "uniform" as Handle },
+          ];
         for (const h of hs) {
           ctx.fillStyle = h.m === "uniform" ? "#111827" : "#1F2937";
           ctx.globalAlpha = hoverHandle === h.m ? 1 : 0.9;
@@ -487,11 +490,11 @@ export default function App() {
           ctx.fillStyle = "#fff"; ctx.globalAlpha = 1;
           ctx.fillRect(h.x - (H / 2 - 2), h.y - (H / 2 - 2), H - 4, H - 4);
         }
-        ctx.restore();
+          ctx.restore();
+        }
       }
-    }
 
-    drawGrid(ctx);
+      drawGrid(ctx);
 
     // Guide X lines
     if (guideXs.length) {
@@ -526,25 +529,25 @@ export default function App() {
     }
 
     // Lines
-    if (connectLines) {
-      const rr = innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x, rr.y, rr.w, rr.h); ctx.clip();
-      ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
+      if (connectLines) {
+        const rr = innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x, rr.y, rr.w, rr.h); ctx.clip();
+        ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.globalAlpha = lineAlpha; ctx.lineWidth = lineWidth;
       for (const s of currentState.series) {
         if (s.points.length < 2) continue; const pxPts = s.points.map(p => dataToPixel(p.x, p.y));
-        ctx.strokeStyle = s.color; ctx.beginPath();
+          ctx.strokeStyle = s.color; ctx.beginPath();
         if (smoothLines && pxPts.length >= 2) catmullRomPath(ctx, pxPts, smoothAlpha);
         else { ctx.moveTo(pxPts[0].px, pxPts[0].py); for (let i = 1; i < pxPts.length; i++) ctx.lineTo(pxPts[i].px, pxPts[i].py); }
-        ctx.stroke();
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1; ctx.restore();
       }
-      ctx.globalAlpha = 1; ctx.restore();
-    }
 
     // Points
-    if (showPoints) {
+      if (showPoints) {
       currentState.series.forEach((s, si) => {
         ctx.fillStyle = s.color; ctx.strokeStyle = "#fff";
         s.points.forEach((p, pi) => {
-          const P = dataToPixel(p.x, p.y);
+             const P = dataToPixel(p.x, p.y);
           ctx.beginPath(); ctx.arc(P.px, P.py, ptRadius, 0, Math.PI * 2); ctx.fill();
           if (ptRadius >= 3) { ctx.lineWidth = 1; ctx.stroke(); }
           if (selectedPoint?.seriesIndex === si && selectedPoint?.pointIndex === pi) {
@@ -556,7 +559,7 @@ export default function App() {
     }
 
     // Axes titles
-    ctx.strokeStyle = "#374151"; ctx.lineWidth = 1.2; ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = "#374151"; ctx.lineWidth = 1.2; ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.fillStyle = "#111827"; ctx.font = "14px ui-sans-serif, system-ui"; ctx.textAlign = "center"; ctx.fillText(currentState.xLog ? "X (10^n)" : "X", r.x + r.w / 2, r.y + r.h + 34);
     ctx.save(); ctx.translate(r.x - 45, r.y + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(currentState.yLog ? "Y (10^n)" : "Y", 0, 0); ctx.restore();
 
@@ -574,11 +577,11 @@ export default function App() {
 
     // Magnifier
     if (magnifyOn && hoverRef.current.x !== null) {
-      const hp = dataToPixel(hoverRef.current.x!, hoverRef.current.y!);
+        const hp = dataToPixel(hoverRef.current.x!, hoverRef.current.y!);
       const sz = 120, f = magnifyFactor;
       const sx = Math.max(0, Math.min(size.w - sz / f, hp.px - sz / (2 * f)));
       const sy = Math.max(0, Math.min(size.h - sz / f, hp.py - sz / (2 * f)));
-      ctx.save(); ctx.imageSmoothingEnabled = false;
+        ctx.save(); ctx.imageSmoothingEnabled = false;
       ctx.drawImage(c, sx, sy, sz / f, sz / f, size.w - sz - 16, 16, sz, sz);
       ctx.strokeStyle = "#111827"; ctx.lineWidth = 2; ctx.strokeRect(size.w - sz - 16, 16, sz, sz);
       ctx.beginPath(); ctx.moveTo(size.w - sz - 16 + sz / 2, 16); ctx.lineTo(size.w - sz - 16 + sz / 2, 16 + sz);
@@ -605,20 +608,24 @@ export default function App() {
       const i2tXMin = 0.001, i2tXMax = 100000; // 시간 범위
       const i2tYMin = 100, i2tYMax = 1e10; // I²t 범위
 
-      // I-t 데이터를 I²t로 변환
+      // I-t 데이터를 I²t로 변환 (제품 하나의 T–C 기준)
       const activeSeriesData = currentState.series[activeSeries];
       if (activeSeriesData && activeSeriesData.points.length >= 2) {
         // I-t 샘플 생성 (x=시간, y=전류)
         const samples: Sample[] = activeSeriesData.points.map(p => ({ t: p.x, i: p.y }));
         samples.sort((a, b) => a.t - b.t);
         
-        // 기본 I²t 커브 계산
+        // 기본 I²t 커브 계산 (Base 제품)
         const baseI2t = toI2tCurve(samples);
         
         if (baseI2t.length > 0) {
-          // 각 수명 곡선 그리기
+          // 각 수명 곡선 그리기 (모드별 스케일 계산)
           lifetimeCycles.forEach((cycles, idx) => {
-            const ratio = lifetimeRatios[idx] || 1.0;
+            // I_mode: I_N = m * I_base → I²t_N = (m^2) * I²t_base
+            // I2t_mode: I²t_N = r * I²t_base
+            const m = currentMultipliers[idx] ?? 1.0;
+            const rScale = lifetimeRatios[idx] ?? 1.0;
+            const yScale = lifetimeMode === "I_mode" ? (m * m) : rScale;
             const color = idx === 0 ? "#2563EB" : idx === 1 ? "#10B981" : idx === 2 ? "#DC2626" : 
                          idx === 3 ? "#F59E0B" : idx === 4 ? "#8B5CF6" : idx === 5 ? "#EC4899" : "#6B7280";
             
@@ -629,7 +636,7 @@ export default function App() {
             
             let first = true;
             baseI2t.forEach((pt) => {
-              const scaledY = pt.y * ratio;
+              const scaledY = pt.y * yScale;
               const px = r.x + ((Math.log10(Math.max(1e-12, pt.x)) - Math.log10(i2tXMin)) / 
                                 (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
               const py = r.y + r.h - ((Math.log10(Math.max(1e-12, scaledY)) - Math.log10(i2tYMin)) / 
@@ -648,7 +655,7 @@ export default function App() {
             // 레전드 라벨
             if (idx === 0 || idx === lifetimeCycles.length - 1) {
               const lastPt = baseI2t[baseI2t.length - 1];
-              const scaledY = lastPt.y * ratio;
+              const scaledY = lastPt.y * yScale;
               const px = r.x + ((Math.log10(Math.max(1e-12, lastPt.x)) - Math.log10(i2tXMin)) / 
                                 (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
               const py = r.y + r.h - ((Math.log10(Math.max(1e-12, scaledY)) - Math.log10(i2tYMin)) / 
@@ -715,7 +722,7 @@ export default function App() {
     } catch (err) {
       console.error("I²t graph render error", err);
     }
-  }, [currentState, activeSeries, size, pad, showI2tGraph, lifetimeCycles, lifetimeRatios, tick]);
+  }, [currentState, activeSeries, size, pad, showI2tGraph, lifetimeCycles, lifetimeRatios, currentMultipliers, lifetimeMode, tick]);
 
   /* ==== 마우스 ==== */
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -780,7 +787,7 @@ export default function App() {
       setPickAnchor(false);
       return;
     }
-
+    
     if (bgEditMode) {
       const h = pickHandle(px, py);
       if (h !== "none") {
@@ -827,7 +834,8 @@ export default function App() {
     bg: { xform: currentState.bgXform, customAnchors: currentState.customAnchors, activeBg, keepAspect, showAB, opacityAB },
     guidesX: guideXs,
     guidesY: guideYs,
-    cross: { fromX: showCrossFromX, fromY: showCrossFromY }
+    cross: { fromX: showCrossFromX, fromY: showCrossFromY },
+    i2t: { show: showI2tGraph, mode: lifetimeMode, cycles: lifetimeCycles, multipliers: currentMultipliers, ratios: lifetimeRatios }
   });
 
   const applyPreset = (p: any) => {
@@ -855,6 +863,15 @@ export default function App() {
       setShowAB(p.bg?.showAB ?? [true, true]);
       setOpacityAB(p.bg?.opacityAB ?? [1, 0.6]);
       setActiveBg(p.bg?.activeBg ?? 0);
+
+      // I²t 옵션 로드
+      if (p.i2t) {
+        setShowI2tGraph(!!p.i2t.show);
+        if (p.i2t.mode === "I_mode" || p.i2t.mode === "I2t_mode") setLifetimeMode(p.i2t.mode);
+        if (Array.isArray(p.i2t.cycles)) setLifetimeCycles(p.i2t.cycles.map(Number).filter((v: number)=>isFinite(v)&&v>0));
+        if (Array.isArray(p.i2t.multipliers)) setCurrentMultipliers(p.i2t.multipliers.map(Number).filter((v: number)=>isFinite(v)&&v>0));
+        if (Array.isArray(p.i2t.ratios)) setLifetimeRatios(p.i2t.ratios.map(Number).filter((v: number)=>isFinite(v)&&v>0));
+      }
 
       updateState(() => next, true);
       notify("Preset loaded");
@@ -987,7 +1004,7 @@ export default function App() {
                 <div className="flex border-b border-gray-200">
                   <button onClick={() => setActiveBg(0)} className={`-mb-px border-b-2 px-4 py-2 text-lg font-semibold ${activeBg === 0 ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"}`}>Image A</button>
                   <button onClick={() => setActiveBg(1)} className={`-mb-px border-b-2 px-4 py-2 text-lg font-semibold ${activeBg === 1 ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"}`}>Image B</button>
-                </div>
+          </div>
 
                 <button onClick={() => (activeBg === 0 ? fileARef : fileBRef).current?.click()} className="w-full rounded-lg bg-gray-800 py-3 text-center font-semibold text-white hover:bg-gray-700">Load Image {activeBg === 0 ? "A" : "B"}</button>
                 <input ref={fileARef} type="file" accept="image/*" hidden onChange={(e)=>{const f=e.target.files?.[0]; if(f) onFile(f,0); (e.target as any).value="";}}/>
@@ -1000,8 +1017,8 @@ export default function App() {
                   <div className="col-span-2 grid grid-cols-2 gap-3">
                     <button onClick={()=>setPickAnchor(v=>!v)} className={`w-full rounded-lg px-3 py-2 font-semibold ${pickAnchor ? "bg-orange-100 text-orange-800" : "bg-gray-200 text-gray-800"}`}>{pickAnchor ? "Picking Anchor..." : "Pick Anchor"}</button>
                     <button onClick={()=>updateState(prev=>{ const n=[...prev.customAnchors] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return {...prev, customAnchors:n};})} className="w-full rounded-lg bg-gray-200 px-3 py-2 font-semibold text-gray-800">Clear Anchor</button>
-                  </div>
-                </div>
+          </div>
+          </div>
               </div>
             )}
           </div>
@@ -1013,8 +1030,8 @@ export default function App() {
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} />
                 Magnifier
-              </label>
-            </div>
+                </label>
+              </div>
 
             <div className="space-y-5 text-base">
               <div className="flex items-center gap-6">
@@ -1026,7 +1043,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4">
                 <label className="flex flex-col gap-2">Name A <input className="w-full rounded-md border px-3 py-2" value={currentState.series[0].name} onChange={(e)=>updateState(p=>({...p, series:p.series.map((s,i)=>i===0?{...s, name:e.target.value}:s)}))}/></label>
                 <label className="flex flex-col gap-2">Name B <input className="w-full rounded-md border px-3 py-2" value={currentState.series[1].name} onChange={(e)=>updateState(p=>({...p, series:p.series.map((s,i)=>i===1?{...s, name:e.target.value}:s)}))}/></label>
-              </div>
+            </div>
 
               <div className="!mt-5 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-gray-200 pt-5">
                 <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect points with a line</label>
@@ -1042,7 +1059,7 @@ export default function App() {
               <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
                 <div className="flex items-center justify-between">
                   <h4 className="font-semibold text-gray-600">Guides</h4>
-                </div>
+              </div>
                 <div className="flex items-center gap-2">
                   <span className="w-6 font-semibold text-gray-600">X</span>
                   <input
@@ -1076,7 +1093,7 @@ export default function App() {
                   >Add</button>
                   <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{setGuideXs([]); setGuideXLabels({});}}>Clear</button>
                   <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromX} onChange={(e)=>setShowCrossFromX(e.target.checked)} /> Cross</label>
-                </div>
+              </div>
                 <div className="flex items-center gap-2">
                   <span className="w-6 font-semibold text-gray-600">Y</span>
                   <input
@@ -1110,24 +1127,68 @@ export default function App() {
                   >Add</button>
                   <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{setGuideYs([]); setGuideYLabels({});}}>Clear</button>
                   <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross</label>
-                </div>
               </div>
+            </div>
 
               {/* I²t Lifetime Graph */}
               <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
                 <div className="flex items-center justify-between">
                   <h4 className="font-semibold text-gray-600">I²t Lifetime Graph</h4>
-                </div>
+              </div>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" className="h-4 w-4" checked={showI2tGraph} onChange={(e)=>setShowI2tGraph(e.target.checked)} />
                   <span>Show I²t Graph</span>
                 </label>
-                <div className="text-xs text-gray-500">
-                  Active series의 I-t 데이터를 I²t 수명 곡선으로 변환하여 표시합니다.
-                </div>
+                <div className="grid grid-cols-1 gap-3 text-sm">
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2"><input type="radio" name="lifeMode" checked={lifetimeMode==='I_mode'} onChange={()=>setLifetimeMode('I_mode')} /> I_mode (current multipliers)</label>
+                    <label className="flex items-center gap-2"><input type="radio" name="lifeMode" checked={lifetimeMode==='I2t_mode'} onChange={()=>setLifetimeMode('I2t_mode')} /> I²t_mode (I²t ratios)</label>
+              </div>
+                  <div className="grid grid-cols-1 gap-2">
+                    <label className="flex items-center gap-3">
+                      <span className="w-28 text-gray-600">N levels</span>
+                      <input
+                        className="flex-1 rounded-md border px-3 py-2"
+                        value={lifetimeCycles.join(', ')}
+                        onChange={(e)=>{
+                          const arr = e.target.value.split(',').map(s=>Number(s.trim())).filter(v=>isFinite(v)&&v>0);
+                          if (arr.length) setLifetimeCycles(arr);
+                        }}
+                      />
+                    </label>
+                    {lifetimeMode==='I_mode' ? (
+                      <label className="flex items-center gap-3">
+                        <span className="w-28 text-gray-600">Multipliers</span>
+                        <input
+                          className="flex-1 rounded-md border px-3 py-2"
+                          value={currentMultipliers.join(', ')}
+                          onChange={(e)=>{
+                            const arr = e.target.value.split(',').map(s=>Number(s.trim())).filter(v=>isFinite(v)&&v>0);
+                            if (arr.length) setCurrentMultipliers(arr);
+                          }}
+                        />
+                      </label>
+                    ) : (
+                      <label className="flex items-center gap-3">
+                        <span className="w-28 text-gray-600">I²t ratios</span>
+                        <input
+                          className="flex-1 rounded-md border px-3 py-2"
+                          value={lifetimeRatios.join(', ')}
+                          onChange={(e)=>{
+                            const arr = e.target.value.split(',').map(s=>Number(s.trim())).filter(v=>isFinite(v)&&v>0);
+                            if (arr.length) setLifetimeRatios(arr);
+                          }}
+                        />
+                      </label>
+                    )}
+                    <div className="text-xs text-gray-500">
+                      Active series의 T–C(Base) 곡선을 기준으로 수명 곡선을 생성합니다. I_mode: I²t= (m·I)²·t, I²t_mode: I²t = r · I²t_base.
+              </div>
+              </div>
               </div>
             </div>
-          </div>
+              </div>
+              </div>
             </>
           )}
         </aside>
@@ -1142,23 +1203,23 @@ export default function App() {
               ) : <span>Hover over the graph area to see coordinates.</span>}
             </div>
             <div className="overflow-hidden rounded-lg border border-gray-300">
-              <canvas
-                ref={canvasRef}
-                width={size.w}
-                height={size.h}
+            <canvas
+              ref={canvasRef}
+              width={size.w}
+              height={size.h}
                 className="block touch-none select-none"
                 style={{ cursor: cursorForHandle(hoverHandle, bgEditMode, pickAnchor) as any }}
-                onMouseMove={onMouseMove}
-                onMouseDown={onMouseDown}
-                onMouseUp={onMouseUp}
-                onMouseLeave={onMouseLeave}
+              onMouseMove={onMouseMove}
+              onMouseDown={onMouseDown}
+              onMouseUp={onMouseUp}
+              onMouseLeave={onMouseLeave}
                 onWheel={(e)=>{ if(!bgEditMode) return; e.preventDefault(); const k = e.deltaY < 0 ? 1.05 : 0.95; updateState(prev=>{const n=[...prev.bgXform] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf, sx: nsx, sy: keepAspect?nsx:nsy}; return {...prev, bgXform:n};}); }}
-                onDragOver={(e)=>e.preventDefault()}
+              onDragOver={(e)=>e.preventDefault()}
                 onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg);}}
                 onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
-              />
-            </div>
+            />
           </div>
+        </div>
 
           {/* I²t Lifetime Graph */}
           {showI2tGraph && (
@@ -1171,7 +1232,7 @@ export default function App() {
                   height={size.h}
                   className="block touch-none select-none"
                 />
-              </div>
+      </div>
             </div>
           )}
         </div>
@@ -1203,7 +1264,7 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+      </div>
             </div>
 
             {/* Guides Table */}
@@ -1236,7 +1297,7 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+        </div>
             </div>
           </div>
         </div>
