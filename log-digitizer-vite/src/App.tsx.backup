@@ -1,6 +1,5 @@
 /* @ts-nocheck */
 import { useEffect, useRef, useState } from "react";
-import { toI2tCurve, type Sample } from "./lib/i2t";
 
 /**
  * Log-scale Graph Digitizer — single file
@@ -51,13 +50,6 @@ export default function App() {
   const [size] = useState({ w: 960, h: 560 });
   const [pad] = useState({ left: 60, right: 20, top: 30, bottom: 46 });
   const [axesOpen, setAxesOpen] = useState(true);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  
-  // I²t 그래프 관련
-  const i2tCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [showI2tGraph, setShowI2tGraph] = useState(true);
-  const [lifetimeCycles, setLifetimeCycles] = useState<number[]>([1, 2, 3, 5, 10, 20]);
-  const [lifetimeRatios, setLifetimeRatios] = useState<number[]>([1, 2, 3, 5, 10, 20]);
 
   const [activeSeries, setActiveSeries] = useState(0);
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint>(null);
@@ -590,133 +582,6 @@ export default function App() {
     guideXs, guideYs, showCrossFromX, showCrossFromY, magnifyOn, magnifyFactor, selectedPoint, tick
   ]);
 
-  /* ==== I²t Lifetime Graph Render ==== */
-  useEffect(() => {
-    if (!showI2tGraph || !currentState) return;
-    try {
-      const c = i2tCanvasRef.current; if (!c) return;
-      const ctx = c.getContext("2d"); if (!ctx) return;
-      const r = innerRect();
-      ctx.clearRect(0, 0, size.w, size.h);
-      ctx.fillStyle = "#F9FAFB"; ctx.fillRect(0, 0, size.w, size.h);
-      ctx.fillStyle = "#fff"; ctx.fillRect(r.x, r.y, r.w, r.h);
-
-      // I²t 그래프 축 범위 설정 (로그 스케일)
-      const i2tXMin = 0.001, i2tXMax = 100000; // 시간 범위
-      const i2tYMin = 100, i2tYMax = 1e10; // I²t 범위
-
-      // I-t 데이터를 I²t로 변환
-      const activeSeriesData = currentState.series[activeSeries];
-      if (activeSeriesData && activeSeriesData.points.length >= 2) {
-        // I-t 샘플 생성 (x=시간, y=전류)
-        const samples: Sample[] = activeSeriesData.points.map(p => ({ t: p.x, i: p.y }));
-        samples.sort((a, b) => a.t - b.t);
-        
-        // 기본 I²t 커브 계산
-        const baseI2t = toI2tCurve(samples);
-        
-        if (baseI2t.length > 0) {
-          // 각 수명 곡선 그리기
-          lifetimeCycles.forEach((cycles, idx) => {
-            const ratio = lifetimeRatios[idx] || 1.0;
-            const color = idx === 0 ? "#2563EB" : idx === 1 ? "#10B981" : idx === 2 ? "#DC2626" : 
-                         idx === 3 ? "#F59E0B" : idx === 4 ? "#8B5CF6" : idx === 5 ? "#EC4899" : "#6B7280";
-            
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = 0.8;
-            ctx.beginPath();
-            
-            let first = true;
-            baseI2t.forEach((pt) => {
-              const scaledY = pt.y * ratio;
-              const px = r.x + ((Math.log10(Math.max(1e-12, pt.x)) - Math.log10(i2tXMin)) / 
-                                (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
-              const py = r.y + r.h - ((Math.log10(Math.max(1e-12, scaledY)) - Math.log10(i2tYMin)) / 
-                                      (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
-              
-              if (first) {
-                ctx.moveTo(px, py);
-                first = false;
-              } else {
-                ctx.lineTo(px, py);
-              }
-            });
-            
-            ctx.stroke();
-            
-            // 레전드 라벨
-            if (idx === 0 || idx === lifetimeCycles.length - 1) {
-              const lastPt = baseI2t[baseI2t.length - 1];
-              const scaledY = lastPt.y * ratio;
-              const px = r.x + ((Math.log10(Math.max(1e-12, lastPt.x)) - Math.log10(i2tXMin)) / 
-                                (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
-              const py = r.y + r.h - ((Math.log10(Math.max(1e-12, scaledY)) - Math.log10(i2tYMin)) / 
-                                      (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
-              ctx.fillStyle = color;
-              ctx.font = "12px ui-sans-serif";
-              ctx.fillText(`${cycles}次`, px + 5, py - 5);
-            }
-          });
-          
-          ctx.globalAlpha = 1;
-        }
-      }
-
-      // I²t 그래프 그리드 및 축
-      const drawI2tGrid = (ctx: CanvasRenderingContext2D, r: { x: number; y: number; w: number; h: number }) => {
-        ctx.save();
-        ctx.strokeStyle = "#E5E7EB";
-        ctx.fillStyle = "#6B7280";
-        ctx.lineWidth = 1;
-        ctx.font = "12px ui-sans-serif";
-
-        // X축 (시간)
-        const x0 = Math.floor(Math.log10(i2tXMin)), x1 = Math.ceil(Math.log10(i2tXMax));
-        for (let n = x0; n <= x1; n++) {
-          const px = r.x + ((n - Math.log10(i2tXMin)) / (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
-          ctx.beginPath();
-          ctx.moveTo(px, r.y);
-          ctx.lineTo(px, r.y + r.h);
-          ctx.stroke();
-          ctx.textAlign = "center";
-          ctx.fillText(pow10Label(n), px, r.y + r.h + 18);
-        }
-
-        // Y축 (I²t)
-        const y0 = Math.floor(Math.log10(i2tYMin)), y1 = Math.ceil(Math.log10(i2tYMax));
-        for (let n = y0; n <= y1; n++) {
-          const py = r.y + r.h - ((n - Math.log10(i2tYMin)) / (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
-          ctx.beginPath();
-          ctx.moveTo(r.x, py);
-          ctx.lineTo(r.x + r.w, py);
-          ctx.stroke();
-          ctx.textAlign = "right";
-          ctx.fillText(pow10Label(n), r.x - 6, py + 4);
-        }
-        ctx.restore();
-      };
-
-      drawI2tGrid(ctx, r);
-      
-      ctx.strokeStyle = "#374151";
-      ctx.lineWidth = 1.2;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = "#111827";
-      ctx.font = "14px ui-sans-serif, system-ui";
-      ctx.textAlign = "center";
-      ctx.fillText("수명 I²t특성도", r.x + r.w/2, r.y - 20);
-      ctx.fillText("elapsed time (Sec)", r.x + r.w/2, r.y + r.h + 34);
-      ctx.save();
-      ctx.translate(r.x - 45, r.y + r.h/2);
-      ctx.rotate(-Math.PI/2);
-      ctx.fillText("I²t", 0, 0);
-      ctx.restore();
-    } catch (err) {
-      console.error("I²t graph render error", err);
-    }
-  }, [currentState, activeSeries, size, pad, showI2tGraph, lifetimeCycles, lifetimeRatios, tick]);
-
   /* ==== 마우스 ==== */
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { px, py } = canvasPoint(e);
@@ -951,19 +816,9 @@ export default function App() {
       </header>
 
       {/* Layout */}
-      <main className={`grid grid-cols-1 gap-8 p-8 ${sidebarCollapsed ? "lg:grid-cols-[72px,1fr]" : "lg:grid-cols-[480px,1fr]"}`}>
+      <main className="grid grid-cols-1 gap-8 p-8 lg:grid-cols-[480px,1fr]">
         {/* Left Panel */}
-        <aside className={`flex flex-col gap-6 ${sidebarCollapsed ? "items-center" : ""}`}>
-          {sidebarCollapsed ? (
-            <div className="flex flex-col gap-2">
-              <button onClick={() => setSidebarCollapsed(false)} className="rounded-lg border px-2 py-2 mb-2 text-xl">›</button>
-              <button onClick={() => setAxesOpen(v => !v)} className={`rounded-lg px-2 py-2 mb-2 text-xl ${axesOpen ? "bg-gray-900 text-white" : "border"}`}>📐</button>
-              <button onClick={() => setBgEditMode(v => !v)} className={`rounded-lg px-2 py-2 mb-2 text-xl ${bgEditMode ? "bg-gray-900 text-white" : "border"}`}>🖼️</button>
-              <button className="rounded-lg px-2 py-2 text-xl border">📈</button>
-            </div>
-          ) : (
-            <>
-              <button onClick={() => setSidebarCollapsed(true)} className="self-end rounded-lg border px-3 py-1 text-sm">‹ 접기</button>
+        <aside className="flex flex-col gap-6">
           {/* Axes */}
           <AccordionSection title="Axes" isOpen={axesOpen} onToggle={() => setAxesOpen(v => !v)}>
             <div className="grid grid-cols-2 gap-4">
@@ -1112,73 +967,37 @@ export default function App() {
                   <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross</label>
                 </div>
               </div>
-
-              {/* I²t Lifetime Graph */}
-              <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-semibold text-gray-600">I²t Lifetime Graph</h4>
-                </div>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" className="h-4 w-4" checked={showI2tGraph} onChange={(e)=>setShowI2tGraph(e.target.checked)} />
-                  <span>Show I²t Graph</span>
-                </label>
-                <div className="text-xs text-gray-500">
-                  Active series의 I-t 데이터를 I²t 수명 곡선으로 변환하여 표시합니다.
-                </div>
-              </div>
             </div>
           </div>
-            </>
-          )}
         </aside>
 
         {/* Right: Canvas + 좌표 패널 */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 col-span-1 lg:col-span-2">
-          {/* Original Graph */}
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="mb-4 h-6 text-base text-gray-600">
-              {hoverRef.current.x !== null ? (
-                <span className="font-mono">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
-              ) : <span>Hover over the graph area to see coordinates.</span>}
-            </div>
-            <div className="overflow-hidden rounded-lg border border-gray-300">
-              <canvas
-                ref={canvasRef}
-                width={size.w}
-                height={size.h}
-                className="block touch-none select-none"
-                style={{ cursor: cursorForHandle(hoverHandle, bgEditMode, pickAnchor) as any }}
-                onMouseMove={onMouseMove}
-                onMouseDown={onMouseDown}
-                onMouseUp={onMouseUp}
-                onMouseLeave={onMouseLeave}
-                onWheel={(e)=>{ if(!bgEditMode) return; e.preventDefault(); const k = e.deltaY < 0 ? 1.05 : 0.95; updateState(prev=>{const n=[...prev.bgXform] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf, sx: nsx, sy: keepAspect?nsx:nsy}; return {...prev, bgXform:n};}); }}
-                onDragOver={(e)=>e.preventDefault()}
-                onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg);}}
-                onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
-              />
-            </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 h-6 text-base text-gray-600">
+            {hoverRef.current.x !== null ? (
+              <span className="font-mono">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
+            ) : <span>Hover over the graph area to see coordinates.</span>}
+          </div>
+          <div className="overflow-hidden rounded-lg border border-gray-300">
+            <canvas
+              ref={canvasRef}
+              width={size.w}
+              height={size.h}
+              className="block touch-none select-none"
+              style={{ cursor: cursorForHandle(hoverHandle, bgEditMode, pickAnchor) as any }}
+              onMouseMove={onMouseMove}
+              onMouseDown={onMouseDown}
+              onMouseUp={onMouseUp}
+              onMouseLeave={onMouseLeave}
+              onWheel={(e)=>{ if(!bgEditMode) return; e.preventDefault(); const k = e.deltaY < 0 ? 1.05 : 0.95; updateState(prev=>{const n=[...prev.bgXform] as [BgXf,BgXf]; const xf=n[activeBg]; const nsx=clampS(xf.sx*k); const nsy=clampS(xf.sy*(keepAspect?k:k)); n[activeBg]={...xf, sx: nsx, sy: keepAspect?nsx:nsy}; return {...prev, bgXform:n};}); }}
+              onDragOver={(e)=>e.preventDefault()}
+              onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f && /^image\//.test(f.type)) onFile(f as File, activeBg);}}
+              onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
+            />
           </div>
 
-          {/* I²t Lifetime Graph */}
-          {showI2tGraph && (
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-              <div className="mb-4 h-6 text-base text-gray-600 font-semibold">I²t Lifetime Graph</div>
-              <div className="overflow-hidden rounded-lg border border-gray-300">
-                <canvas
-                  ref={i2tCanvasRef}
-                  width={size.w}
-                  height={size.h}
-                  className="block touch-none select-none"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 좌표 패널 */}
-        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm col-span-1 lg:col-span-2">
-          <div className="flex flex-col gap-6">
+          {/* 좌표 패널 */}
+          <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* Points Table */}
             <div className="rounded-lg border border-gray-200">
               <div className="border-b px-4 py-2 font-semibold text-gray-700">Points</div>
