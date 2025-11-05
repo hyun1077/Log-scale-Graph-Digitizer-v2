@@ -17,9 +17,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: log-digitizer-vite
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,11 +25,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+          cache-dependency-path: log-digitizer-vite/package-lock.json
 
       - name: Install deps
-        run: npm install
+        working-directory: log-digitizer-vite
+        run: |
+          npm ci || npm install --no-fund --no-audit
 
       - name: Build
+        working-directory: log-digitizer-vite
         run: npm run build
 
       - name: Upload artifact
