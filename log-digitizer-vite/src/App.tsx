@@ -27,12 +27,12 @@ type AppState = {
 };
 
 const AccordionSection = ({ title, children, isOpen, onToggle }) => (
-  <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-    <button onClick={onToggle} className="flex w-full items-center justify-between p-5 text-left">
-      <h3 className="text-lg font-bold text-gray-800">{title}</h3>
-      <span className={`transform text-gray-500 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}>▼</span>
+  <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
+    <button onClick={onToggle} className="flex w-full items-center justify-between p-2 text-left">
+      <h3 className="text-xs font-bold text-gray-800">{title}</h3>
+      <span className={`transform text-gray-500 transition-transform duration-200 text-xs ${isOpen ? "rotate-180" : ""}`}>▼</span>
     </button>
-    {isOpen && <div className="space-y-4 p-5 pt-0 text-base">{children}</div>}
+    {isOpen && <div className="space-y-2 p-2 pt-0 text-xs">{children}</div>}
   </div>
 );
 
@@ -61,6 +61,33 @@ export default function App() {
   const [lifetimeCycles, setLifetimeCycles] = useState<number[]>([1,10,100,1000,10000,100000,1000000]);
   const [currentMultipliers, setCurrentMultipliers] = useState<number[]>([1.00, 2.80, 2.55, 2.06, 1.70, 1.00, 0.70]);
   const [lifetimeRatios, setLifetimeRatios] = useState<number[]>([1.000, 0.907, 0.826, 0.713, 0.551, 0.356, 0.227]);
+  const [selectedLifetimeCycles, setSelectedLifetimeCycles] = useState<Set<number>>(new Set([1,10,100,1000,10000,100000,1000000]));
+  const [showRealCoords, setShowRealCoords] = useState(false);
+  const LIFE_CURRENT_BASE = 3050; // 기준 1배 전류 = 3.05kA = 3050A
+  const [lifeCheckI, setLifeCheckI] = useState<number>(0);
+  const [lifeCheckT, setLifeCheckT] = useState<number>(0);
+  const [lifeIInput, setLifeIInput] = useState<string>("");
+  const [lifeTInput, setLifeTInput] = useState<string>("");
+  const [enterCurrents, setEnterCurrents] = useState<boolean>(false);
+  const [multiplierInputs, setMultiplierInputs] = useState<Record<number,string>>({});
+  const [currentInputs, setCurrentInputs] = useState<Record<number,string>>({});
+  const [i2tFixedRange, setI2tFixedRange] = useState<boolean>(true);
+  
+  // I²t 그래프 체크 시 사이드바 접기
+  useEffect(() => {
+    if (showI2tGraph) {
+      setSidebarCollapsed(true);
+    }
+  }, [showI2tGraph]);
+  
+  // lifetimeCycles 변경 시 selectedLifetimeCycles 업데이트
+  useEffect(() => {
+    const currentSelected = Array.from(selectedLifetimeCycles);
+    const validSelected = currentSelected.filter(c => lifetimeCycles.includes(c));
+    if (validSelected.length === 0 || validSelected.length !== currentSelected.length) {
+      setSelectedLifetimeCycles(new Set(lifetimeCycles));
+    }
+  }, [lifetimeCycles]);
 
   const [activeSeries, setActiveSeries] = useState(0);
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint>(null);
@@ -604,23 +631,54 @@ export default function App() {
       ctx.fillStyle = "#F9FAFB"; ctx.fillRect(0, 0, size.w, size.h);
       ctx.fillStyle = "#fff"; ctx.fillRect(r.x, r.y, r.w, r.h);
 
-      // I²t 그래프 축 범위 설정 (로그 스케일)
-      const i2tXMin = 0.001, i2tXMax = 100000; // 시간 범위
-      const i2tYMin = 100, i2tYMax = 1e10; // I²t 범위
-
-      // I-t 데이터를 I²t로 변환 (제품 하나의 T–C 기준)
+      // I–t 데이터를 순간 I²t로 변환 (제품 하나의 T–C 기준)
       const activeSeriesData = currentState.series[activeSeries];
       if (activeSeriesData && activeSeriesData.points.length >= 2) {
-        // I-t 샘플 생성 (x=시간, y=전류)
-        const samples: Sample[] = activeSeriesData.points.map(p => ({ t: p.x, i: p.y }));
-        samples.sort((a, b) => a.t - b.t);
+        // 원래 그래프: X=전류(I), Y=시간(t) → I²t 그래프: X=시간(t), Y=I²t
+        // 따라서 t=p.y, i=p.x 로 매핑
+        const samples: Sample[] = activeSeriesData.points
+          .map(p => ({ t: p.y, i: p.x }))
+          .filter(s => isFinite(s.t) && isFinite(s.i) && s.t > 0 && s.i > 0)
+          .sort((a, b) => a.t - b.t);
         
-        // 기본 I²t 커브 계산 (Base 제품)
-        const baseI2t = toI2tCurve(samples);
-        
+        // 기본 순간 I²t 커브: y = I(t)^2 · t, x = t
+        const baseI2t = samples.map(s => ({ x: s.t, y: (s.i * s.i) * s.t }));
+
         if (baseI2t.length > 0) {
-          // 각 수명 곡선 그리기 (모드별 스케일 계산)
+          // 축 범위를 데이터 기반으로 동적 계산 (로그 스케일 경계는 10의 지수로 스냅)
+          const minPos = (arr: number[]) => Math.max(1e-12, Math.min(...arr.filter(v => v > 0)) || 1e-12);
+          const maxPos = (arr: number[]) => Math.max(1e-12, Math.max(...arr.filter(v => v > 0)) || 1e-12);
+
+          const tVals = baseI2t.map(p => p.x);
+          const baseY = baseI2t.map(p => p.y);
+          const scales = (lifetimeMode === "I_mode" ? currentMultipliers.map(m => m * m) : lifetimeRatios).filter(v => isFinite(v) && v > 0);
+          const minScale = scales.length ? Math.min(...scales) : 1;
+          const maxScale = scales.length ? Math.max(...scales) : 1;
+
+          const rawXMin = minPos(tVals), rawXMax = maxPos(tVals);
+          const rawYMin = minPos(baseY) * Math.max(1e-12, minScale);
+          const rawYMax = maxPos(baseY) * Math.max(1e-12, maxScale);
+
+          const floorPow10 = (v: number) => Math.pow(10, Math.floor(Math.log10(Math.max(1e-12, v))));
+          const ceilPow10 = (v: number) => Math.pow(10, Math.ceil(Math.log10(Math.max(1e-12, v))));
+
+          const dynXMin = floorPow10(rawXMin);
+          const dynXMax = ceilPow10(rawXMax);
+          const dynYMin = floorPow10(rawYMin);
+          const dynYMax = ceilPow10(rawYMax);
+          const i2tXMin = i2tFixedRange ? 1e-3 : dynXMin;
+          const i2tXMax = i2tFixedRange ? 1e4 : dynXMax;
+          const i2tYMin = i2tFixedRange ? 1e2 : dynYMin;
+          const i2tYMax = i2tFixedRange ? 1e10 : dynYMax;
+        
+          // 각 수명 곡선 그리기 (모드별 스케일 계산, 선택된 것만) — 축 내부로 클리핑
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(r.x, r.y, r.w, r.h);
+          ctx.clip();
           lifetimeCycles.forEach((cycles, idx) => {
+            if (!selectedLifetimeCycles.has(cycles)) return;
+            
             // I_mode: I_N = m * I_base → I²t_N = (m^2) * I²t_base
             // I2t_mode: I²t_N = r * I²t_base
             const m = currentMultipliers[idx] ?? 1.0;
@@ -634,77 +692,95 @@ export default function App() {
             ctx.globalAlpha = 0.8;
             ctx.beginPath();
             
-            let first = true;
+            // 부드러운 곡선을 위해 Catmull-Rom 스플라인 사용
+            const pxPts: { px: number; py: number }[] = [];
             baseI2t.forEach((pt) => {
               const scaledY = pt.y * yScale;
               const px = r.x + ((Math.log10(Math.max(1e-12, pt.x)) - Math.log10(i2tXMin)) / 
                                 (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
               const py = r.y + r.h - ((Math.log10(Math.max(1e-12, scaledY)) - Math.log10(i2tYMin)) / 
                                       (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
-              
-              if (first) {
-                ctx.moveTo(px, py);
-                first = false;
-              } else {
-                ctx.lineTo(px, py);
-              }
+              pxPts.push({ px, py });
             });
             
-            ctx.stroke();
-            
-            // 레전드 라벨
-            if (idx === 0 || idx === lifetimeCycles.length - 1) {
-              const lastPt = baseI2t[baseI2t.length - 1];
-              const scaledY = lastPt.y * yScale;
-              const px = r.x + ((Math.log10(Math.max(1e-12, lastPt.x)) - Math.log10(i2tXMin)) / 
-                                (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
-              const py = r.y + r.h - ((Math.log10(Math.max(1e-12, scaledY)) - Math.log10(i2tYMin)) / 
-                                      (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
-              ctx.fillStyle = color;
-              ctx.font = "12px ui-sans-serif";
-              ctx.fillText(`${cycles}次`, px + 5, py - 5);
+            if (pxPts.length >= 2) {
+              catmullRomPath(ctx, pxPts, smoothAlpha);
             }
+            
+            ctx.stroke();
+          });
+          
+          // 레전드 (왼쪽 상단)
+          let legendY = r.y + 20;
+          lifetimeCycles.forEach((cycles, idx) => {
+            if (!selectedLifetimeCycles.has(cycles)) return;
+            const color = idx === 0 ? "#2563EB" : idx === 1 ? "#10B981" : idx === 2 ? "#DC2626" : 
+                         idx === 3 ? "#F59E0B" : idx === 4 ? "#8B5CF6" : idx === 5 ? "#EC4899" : "#6B7280";
+              ctx.fillStyle = color;
+            ctx.fillRect(r.x + 10, legendY - 10, 12, 12);
+            ctx.fillStyle = "#0f172a";
+              ctx.font = "12px ui-sans-serif";
+            ctx.textAlign = "left";
+            ctx.fillText(`${cycles}次`, r.x + 26, legendY + 2);
+            legendY += 18;
           });
           
           ctx.globalAlpha = 1;
+
+          // 사용자 입력 포인트 표시 (실제 전류/시간)
+          if (isFinite(lifeCheckI) && isFinite(lifeCheckT) && lifeCheckI > 0 && lifeCheckT > 0) {
+            const userY = lifeCheckI * lifeCheckI * lifeCheckT; // I²t
+            const px = r.x + ((Math.log10(Math.max(1e-12, lifeCheckT)) - Math.log10(i2tXMin)) / (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
+            const py = r.y + r.h - ((Math.log10(Math.max(1e-12, userY)) - Math.log10(i2tYMin)) / (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
+            ctx.save();
+            ctx.strokeStyle = "#EF4444"; ctx.fillStyle = "#EF4444";
+            ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
+            ctx.setLineDash([4,3]);
+            ctx.beginPath(); ctx.moveTo(px, r.y); ctx.lineTo(px, r.y+r.h); ctx.moveTo(r.x, py); ctx.lineTo(r.x+r.w, py); ctx.stroke();
+            ctx.setLineDash([]); ctx.font = "12px ui-sans-serif"; ctx.fillStyle = "#111827";
+            ctx.fillText(`I=${lifeCheckI.toFixed(3)}A, t=${lifeCheckT}`, Math.min(r.x + r.w - 120, px + 6), Math.max(r.y + 12, py - 6));
+            ctx.restore();
+          }
+
+          ctx.restore(); // 클리핑 해제
+
+          // I²t 그래프 그리드 및 축 (동적 경계 사용)
+          const drawI2tGrid = (ctx: CanvasRenderingContext2D, r: { x: number; y: number; w: number; h: number }) => {
+            ctx.save();
+            ctx.strokeStyle = "#E5E7EB";
+            ctx.fillStyle = "#6B7280";
+            ctx.lineWidth = 1;
+            ctx.font = "12px ui-sans-serif";
+
+            // X축 (시간)
+            const x0 = Math.floor(Math.log10(i2tXMin)), x1 = Math.ceil(Math.log10(i2tXMax));
+            for (let n = x0; n <= x1; n++) {
+              const px = r.x + ((n - Math.log10(i2tXMin)) / (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
+              ctx.beginPath();
+              ctx.moveTo(px, r.y);
+              ctx.lineTo(px, r.y + r.h);
+              ctx.stroke();
+              ctx.textAlign = "center";
+              ctx.fillText(pow10Label(n), px, r.y + r.h + 18);
+            }
+
+            // Y축 (I²t)
+            const y0 = Math.floor(Math.log10(i2tYMin)), y1 = Math.ceil(Math.log10(i2tYMax));
+            for (let n = y0; n <= y1; n++) {
+              const py = r.y + r.h - ((n - Math.log10(i2tYMin)) / (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
+              ctx.beginPath();
+              ctx.moveTo(r.x, py);
+              ctx.lineTo(r.x + r.w, py);
+              ctx.stroke();
+              ctx.textAlign = "right";
+              ctx.fillText(pow10Label(n), r.x - 6, py + 4);
+            }
+            ctx.restore();
+          };
+
+          drawI2tGrid(ctx, r);
         }
       }
-
-      // I²t 그래프 그리드 및 축
-      const drawI2tGrid = (ctx: CanvasRenderingContext2D, r: { x: number; y: number; w: number; h: number }) => {
-        ctx.save();
-        ctx.strokeStyle = "#E5E7EB";
-        ctx.fillStyle = "#6B7280";
-        ctx.lineWidth = 1;
-        ctx.font = "12px ui-sans-serif";
-
-        // X축 (시간)
-        const x0 = Math.floor(Math.log10(i2tXMin)), x1 = Math.ceil(Math.log10(i2tXMax));
-        for (let n = x0; n <= x1; n++) {
-          const px = r.x + ((n - Math.log10(i2tXMin)) / (Math.log10(i2tXMax) - Math.log10(i2tXMin))) * r.w;
-          ctx.beginPath();
-          ctx.moveTo(px, r.y);
-          ctx.lineTo(px, r.y + r.h);
-          ctx.stroke();
-          ctx.textAlign = "center";
-          ctx.fillText(pow10Label(n), px, r.y + r.h + 18);
-        }
-
-        // Y축 (I²t)
-        const y0 = Math.floor(Math.log10(i2tYMin)), y1 = Math.ceil(Math.log10(i2tYMax));
-        for (let n = y0; n <= y1; n++) {
-          const py = r.y + r.h - ((n - Math.log10(i2tYMin)) / (Math.log10(i2tYMax) - Math.log10(i2tYMin))) * r.h;
-          ctx.beginPath();
-          ctx.moveTo(r.x, py);
-          ctx.lineTo(r.x + r.w, py);
-          ctx.stroke();
-          ctx.textAlign = "right";
-          ctx.fillText(pow10Label(n), r.x - 6, py + 4);
-        }
-        ctx.restore();
-      };
-
-      drawI2tGrid(ctx, r);
       
       ctx.strokeStyle = "#374151";
       ctx.lineWidth = 1.2;
@@ -722,7 +798,7 @@ export default function App() {
     } catch (err) {
       console.error("I²t graph render error", err);
     }
-  }, [currentState, activeSeries, size, pad, showI2tGraph, lifetimeCycles, lifetimeRatios, currentMultipliers, lifetimeMode, tick]);
+  }, [currentState, activeSeries, size, pad, showI2tGraph, lifetimeCycles, lifetimeRatios, currentMultipliers, lifetimeMode, selectedLifetimeCycles, tick, smoothAlpha, lifeCheckI, lifeCheckT]);
 
   /* ==== 마우스 ==== */
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -968,9 +1044,9 @@ export default function App() {
       </header>
 
       {/* Layout */}
-      <main className={`grid grid-cols-1 gap-8 p-8 ${sidebarCollapsed ? "lg:grid-cols-[72px,1fr]" : "lg:grid-cols-[480px,1fr]"}`}>
+      <main className={`grid grid-cols-1 gap-3 p-3 ${sidebarCollapsed ? "lg:grid-cols-[60px,1fr]" : showI2tGraph ? "lg:grid-cols-[280px,1fr,1fr]" : "lg:grid-cols-[280px,1fr]"}`}>
         {/* Left Panel */}
-        <aside className={`flex flex-col gap-6 ${sidebarCollapsed ? "items-center" : ""}`}>
+        <aside className={`flex flex-col gap-2 ${sidebarCollapsed ? "items-center" : ""}`}>
           {sidebarCollapsed ? (
             <div className="flex flex-col gap-2">
               <button onClick={() => setSidebarCollapsed(false)} className="rounded-lg border px-2 py-2 mb-2 text-xl">›</button>
@@ -980,228 +1056,110 @@ export default function App() {
             </div>
           ) : (
             <>
-              <button onClick={() => setSidebarCollapsed(true)} className="self-end rounded-lg border px-3 py-1 text-sm">‹ 접기</button>
+              <button onClick={() => setSidebarCollapsed(true)} className="self-end rounded-lg border px-2 py-0.5 text-xs">‹ 접기</button>
           {/* Axes */}
           <AccordionSection title="Axes" isOpen={axesOpen} onToggle={() => setAxesOpen(v => !v)}>
-            <div className="grid grid-cols-2 gap-4">
-              <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={currentState.xLog} onChange={e => updateState(p => ({ ...p, xLog: e.target.checked }))} /> X Log Scale</label>
-              <label className="flex items-center gap-3">X Min <input type="number" className="w-full rounded-md border px-3 py-2" value={currentState.xMin} onChange={e => updateState(p => ({ ...p, xMin: Number(e.target.value) }))} /></label>
-              <label className="flex items-center gap-3">X Max <input type="number" className="w-full rounded-md border px-3 py-2" value={currentState.xMax} onChange={e => updateState(p => ({ ...p, xMax: Number(e.target.value) }))} /></label>
-              <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={currentState.yLog} onChange={e => updateState(p => ({ ...p, yLog: e.target.checked }))} /> Y Log Scale</label>
-              <label className="flex items-center gap-3">Y Min <input type="number" className="w-full rounded-md border px-3 py-2" value={currentState.yMin} onChange={e => updateState(p => ({ ...p, yMin: Number(e.target.value) }))} /></label>
-              <label className="flex items-center gap-3">Y Max <input type="number" className="w-full rounded-md border px-3 py-2" value={currentState.yMax} onChange={e => updateState(p => ({ ...p, yMax: Number(e.target.value) }))} /></label>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <label className="col-span-2 flex items-center gap-2"><input type="checkbox" className="h-3 w-3" checked={currentState.xLog} onChange={e => updateState(p => ({ ...p, xLog: e.target.checked }))} /> X Log Scale</label>
+              <label className="flex items-center gap-2 text-xs">X Min <input type="number" className="w-full rounded border px-1.5 py-1 text-xs" value={currentState.xMin} onChange={e => updateState(p => ({ ...p, xMin: Number(e.target.value) }))} /></label>
+              <label className="flex items-center gap-2 text-xs">X Max <input type="number" className="w-full rounded border px-1.5 py-1 text-xs" value={currentState.xMax} onChange={e => updateState(p => ({ ...p, xMax: Number(e.target.value) }))} /></label>
+              <label className="col-span-2 flex items-center gap-2 text-xs"><input type="checkbox" className="h-3 w-3" checked={currentState.yLog} onChange={e => updateState(p => ({ ...p, yLog: e.target.checked }))} /> Y Log Scale</label>
+              <label className="flex items-center gap-2 text-xs">Y Min <input type="number" className="w-full rounded border px-1.5 py-1 text-xs" value={currentState.yMin} onChange={e => updateState(p => ({ ...p, yMin: Number(e.target.value) }))} /></label>
+              <label className="flex items-center gap-2 text-xs">Y Max <input type="number" className="w-full rounded border px-1.5 py-1 text-xs" value={currentState.yMax} onChange={e => updateState(p => ({ ...p, yMax: Number(e.target.value) }))} /></label>
             </div>
           </AccordionSection>
 
           {/* Image Edit */}
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-            <button onClick={() => setBgEditMode(v => !v)} className="flex w-full items-center justify-between p-5 text-left">
-              <h3 className="text-lg font-bold text-gray-800">Image Edit</h3>
-              <span className={`rounded-full px-3 py-1 text-sm font-semibold ${bgEditMode ? "bg-orange-100 text-orange-800" : "bg-gray-200 text-gray-700"}`}>{bgEditMode ? "ON" : "OFF"}</span>
+          <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
+            <button onClick={() => setBgEditMode(v => !v)} className="flex w-full items-center justify-between p-2 text-left">
+              <h3 className="text-sm font-bold text-gray-800">Image Edit</h3>
+              <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${bgEditMode ? "bg-orange-100 text-orange-800" : "bg-gray-200 text-gray-700"}`}>{bgEditMode ? "ON" : "OFF"}</span>
             </button>
             {bgEditMode && (
-              <div className="space-y-4 p-5 pt-0 text-base">
+              <div className="space-y-2 p-2 pt-0 text-xs">
                 <div className="flex border-b border-gray-200">
-                  <button onClick={() => setActiveBg(0)} className={`-mb-px border-b-2 px-4 py-2 text-lg font-semibold ${activeBg === 0 ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"}`}>Image A</button>
-                  <button onClick={() => setActiveBg(1)} className={`-mb-px border-b-2 px-4 py-2 text-lg font-semibold ${activeBg === 1 ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"}`}>Image B</button>
-          </div>
+                  <button onClick={() => setActiveBg(0)} className={`-mb-px border-b-2 px-2 py-1 text-xs font-semibold ${activeBg === 0 ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"}`}>Image A</button>
+                  <button onClick={() => setActiveBg(1)} className={`-mb-px border-b-2 px-2 py-1 text-xs font-semibold ${activeBg === 1 ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"}`}>Image B</button>
+                </div>
 
-                <button onClick={() => (activeBg === 0 ? fileARef : fileBRef).current?.click()} className="w-full rounded-lg bg-gray-800 py-3 text-center font-semibold text-white hover:bg-gray-700">Load Image {activeBg === 0 ? "A" : "B"}</button>
+                <button onClick={() => (activeBg === 0 ? fileARef : fileBRef).current?.click()} className="w-full rounded bg-gray-800 py-1.5 text-center text-xs font-semibold text-white hover:bg-gray-700">Load Image {activeBg === 0 ? "A" : "B"}</button>
                 <input ref={fileARef} type="file" accept="image/*" hidden onChange={(e)=>{const f=e.target.files?.[0]; if(f) onFile(f,0); (e.target as any).value="";}}/>
                 <input ref={fileBRef} type="file" accept="image/*" hidden onChange={(e)=>{const f=e.target.files?.[0]; if(f) onFile(f,1); (e.target as any).value="";}}/>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <label className="flex items-center justify-between"><span>Show Image</span><input type="checkbox" className="h-5 w-5" checked={showAB[activeBg]} onChange={(e)=>setShowAB(cur=>{const n=[...cur] as [boolean,boolean]; n[activeBg]=e.target.checked; return n;})}/></label>
-                  <label className="flex items-center gap-3"><span>Opacity</span><input type="range" min={0} max={1} step={0.05} value={opacityAB[activeBg]} onChange={(e)=>setOpacityAB(cur=>{const n=[...cur] as [number,number]; n[activeBg]=Number(e.target.value); return n;})}/></label>
-                  <label className="col-span-2 flex items-center gap-2"><input type="checkbox" checked={keepAspect} onChange={(e)=>setKeepAspect(e.target.checked)}/> Keep Ratio</label>
-                  <div className="col-span-2 grid grid-cols-2 gap-3">
-                    <button onClick={()=>setPickAnchor(v=>!v)} className={`w-full rounded-lg px-3 py-2 font-semibold ${pickAnchor ? "bg-orange-100 text-orange-800" : "bg-gray-200 text-gray-800"}`}>{pickAnchor ? "Picking Anchor..." : "Pick Anchor"}</button>
-                    <button onClick={()=>updateState(prev=>{ const n=[...prev.customAnchors] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return {...prev, customAnchors:n};})} className="w-full rounded-lg bg-gray-200 px-3 py-2 font-semibold text-gray-800">Clear Anchor</button>
-          </div>
-          </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="flex items-center justify-between text-xs"><span>Show Image</span><input type="checkbox" className="h-3 w-3" checked={showAB[activeBg]} onChange={(e)=>setShowAB(cur=>{const n=[...cur] as [boolean,boolean]; n[activeBg]=e.target.checked; return n;})}/></label>
+                  <label className="flex items-center gap-2 text-xs"><span>Opacity</span><input className="w-24" type="range" min={0} max={1} step={0.05} value={opacityAB[activeBg]} onChange={(e)=>setOpacityAB(cur=>{const n=[...cur] as [number,number]; n[activeBg]=Number(e.target.value); return n;})}/></label>
+                  <label className="col-span-2 flex items-center gap-2 text-xs"><input type="checkbox" className="h-3 w-3" checked={keepAspect} onChange={(e)=>setKeepAspect(e.target.checked)}/> Keep Ratio</label>
+                  <div className="col-span-2 grid grid-cols-2 gap-2">
+                    <button onClick={()=>setPickAnchor(v=>!v)} className={`w-full rounded bg-gray-200 px-2 py-1 text-xs font-semibold ${pickAnchor ? "bg-orange-100 text-orange-800" : "text-gray-800"}`}>{pickAnchor ? "Picking..." : "Pick Anchor"}</button>
+                    <button onClick={()=>updateState(prev=>{ const n=[...prev.customAnchors] as [CustomAnchor,CustomAnchor]; n[activeBg]=null; return {...prev, customAnchors:n};})} className="w-full rounded bg-gray-200 px-2 py-1 text-xs font-semibold text-gray-800">Clear</button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
 
           {/* Series & Points */}
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-xl font-bold text-gray-800">Series & Points</h3>
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input type="checkbox" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} />
+          <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-gray-800">Series & Points</h3>
+              <label className="flex items-center gap-1 text-xs text-gray-700">
+                <input type="checkbox" className="h-3 w-3" checked={magnifyOn} onChange={(e)=>setMagnifyOn(e.target.checked)} />
                 Magnifier
                 </label>
               </div>
 
-            <div className="space-y-5 text-base">
-              <div className="flex items-center gap-6">
-                <span className="text-lg font-bold">Active:</span>
-                <label className="flex items-center gap-2 text-lg"><input type="radio" className="h-5 w-5" name="series" checked={activeSeries === 0} onChange={() => { setActiveSeries(0); setSelectedPoint(null); }} /> Series A</label>
-                <label className="flex items-center gap-2 text-lg"><input type="radio" className="h-5 w-5" name="series" checked={activeSeries === 1} onChange={() => { setActiveSeries(1); setSelectedPoint(null); }} /> Series B</label>
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold">Active:</span>
+                <label className="flex items-center gap-1 text-xs"><input type="radio" className="h-3 w-3" name="series" checked={activeSeries === 0} onChange={() => { setActiveSeries(0); setSelectedPoint(null); }} /> A</label>
+                <label className="flex items-center gap-1 text-xs"><input type="radio" className="h-3 w-3" name="series" checked={activeSeries === 1} onChange={() => { setActiveSeries(1); setSelectedPoint(null); }} /> B</label>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <label className="flex flex-col gap-2">Name A <input className="w-full rounded-md border px-3 py-2" value={currentState.series[0].name} onChange={(e)=>updateState(p=>({...p, series:p.series.map((s,i)=>i===0?{...s, name:e.target.value}:s)}))}/></label>
-                <label className="flex flex-col gap-2">Name B <input className="w-full rounded-md border px-3 py-2" value={currentState.series[1].name} onChange={(e)=>updateState(p=>({...p, series:p.series.map((s,i)=>i===1?{...s, name:e.target.value}:s)}))}/></label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex flex-col gap-1 text-xs">Name A <input className="w-full rounded border px-1.5 py-1 text-xs" value={currentState.series[0].name} onChange={(e)=>updateState(p=>({...p, series:p.series.map((s,i)=>i===0?{...s, name:e.target.value}:s)}))}/></label>
+                <label className="flex flex-col gap-1 text-xs">Name B <input className="w-full rounded border px-1.5 py-1 text-xs" value={currentState.series[1].name} onChange={(e)=>updateState(p=>({...p, series:p.series.map((s,i)=>i===1?{...s, name:e.target.value}:s)}))}/></label>
             </div>
 
-              <div className="!mt-5 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-gray-200 pt-5">
-                <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect points with a line</label>
-                <label className="flex items-center gap-3">Width <input className="w-full rounded-md border px-3 py-2" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
-                <label className="flex items-center gap-3">Alpha <input type="range" className="w-full" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} /></label>
-                <label className="col-span-2 flex items-center gap-3"><input type="checkbox" className="h-5 w-5" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> Smooth curve</label>
-                {smoothLines && (<label className="col-span-2 flex items-center gap-3">Strength <input type="range" min={0} max={0.9} step={0.05} className="w-full" value={smoothAlpha} onChange={(e)=>setSmoothAlpha(Number(e.target.value))} /></label>)}
-                <label className="col-span-2 !mt-3 flex items-center gap-3 border-t border-gray-200 pt-4"><input type="checkbox" className="h-5 w-5" checked={showPoints} onChange={(e)=>setShowPoints(e.target.checked)} /> Show points</label>
-                <label className="col-span-2 flex items-center gap-3">Size <input type="range" className="w-full" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} /></label>
+              <div className="!mt-2 grid grid-cols-2 gap-x-2 gap-y-2 border-t border-gray-200 pt-2">
+                <label className="col-span-2 flex items-center gap-2 text-xs"><input type="checkbox" className="h-3 w-3" checked={connectLines} onChange={(e)=>setConnectLines(e.target.checked)} /> Connect points</label>
+                <label className="flex items-center gap-1 text-xs">Width <input className="w-full rounded border px-1 py-0.5 text-xs" value={lineWidth} onChange={(e)=>setLineWidth(Number(e.target.value)||1)} /></label>
+                <label className="flex items-center gap-1 text-xs">Alpha <input type="range" className="w-full" min={0} max={1} step={0.05} value={lineAlpha} onChange={(e)=>setLineAlpha(Number(e.target.value))} /></label>
+                <label className="col-span-2 flex items-center gap-2 text-xs"><input type="checkbox" className="h-3 w-3" checked={smoothLines} onChange={(e)=>setSmoothLines(e.target.checked)} /> Smooth</label>
+                {smoothLines && (<label className="col-span-2 flex items-center gap-2 text-xs">Strength <input type="range" min={0} max={0.9} step={0.05} className="w-full" value={smoothAlpha} onChange={(e)=>setSmoothAlpha(Number(e.target.value))} /></label>)}
+                <label className="col-span-2 !mt-2 flex items-center gap-2 border-t border-gray-200 pt-2 text-xs"><input type="checkbox" className="h-3 w-3" checked={showPoints} onChange={(e)=>setShowPoints(e.target.checked)} /> Show points</label>
+                <label className="col-span-2 flex items-center gap-2 text-xs">Size <input type="range" className="w-full" min={1} max={8} step={1} value={ptRadius} onChange={(e)=>setPtRadius(Number(e.target.value))} /></label>
               </div>
 
-              {/* Guides (Series 끝) */}
-              <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-semibold text-gray-600">Guides</h4>
-              </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-6 font-semibold text-gray-600">X</span>
-                  <input
-                    className="flex-grow rounded-md border px-3 py-2"
-                    placeholder="e.g., 1,000"
-                    value={guideInput}
-                    onChange={(e)=>setGuideInput(e.target.value)}
-                    onKeyDown={(e)=>{
-                      if(e.key==="Enter"){
-                        const raw = e.currentTarget.value.trim();
-                        const n = Number(raw.replace(/,/g,""));
-                        if(isFinite(n) && n>0){
-                          setGuideXs(g=>Array.from(new Set([...g,n])));
-                          setGuideXLabels(m=>({ ...m, [n]: raw })); // 라벨 보존
-                          setGuideInput("");
-                        }
-                      }
-                    }}
-                  />
-                  <button
-                    className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300"
-                    onClick={()=>{
-                      const raw = guideInput.trim();
-                      const n = Number(raw.replace(/,/g,""));
-                      if(isFinite(n) && n>0){
-                        setGuideXs(g=>Array.from(new Set([...g,n])));
-                        setGuideXLabels(m=>({ ...m, [n]: raw }));
-                        setGuideInput("");
-                      }
-                    }}
-                  >Add</button>
-                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{setGuideXs([]); setGuideXLabels({});}}>Clear</button>
-                  <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromX} onChange={(e)=>setShowCrossFromX(e.target.checked)} /> Cross</label>
-              </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-6 font-semibold text-gray-600">Y</span>
-                  <input
-                    className="flex-grow rounded-md border px-3 py-2"
-                    placeholder="e.g., 10"
-                    value={guideYInput}
-                    onChange={(e)=>setGuideYInput(e.target.value)}
-                    onKeyDown={(e)=>{
-                      if(e.key==="Enter"){
-                        const raw = e.currentTarget.value.trim();
-                        const n = Number(raw.replace(/,/g,""));
-                        if(isFinite(n) && n>0){
-                          setGuideYs(g=>Array.from(new Set([...g,n])));
-                          setGuideYLabels(m=>({ ...m, [n]: raw }));
-                          setGuideYInput("");
-                        }
-                      }
-                    }}
-                  />
-                  <button
-                    className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300"
-                    onClick={()=>{
-                      const raw = guideYInput.trim();
-                      const n = Number(raw.replace(/,/g,""));
-                      if(isFinite(n) && n>0){
-                        setGuideYs(g=>Array.from(new Set([...g,n])));
-                        setGuideYLabels(m=>({ ...m, [n]: raw }));
-                        setGuideYInput("");
-                      }
-                    }}
-                  >Add</button>
-                  <button className="rounded-md bg-gray-200 px-3 py-2 hover:bg-gray-300" onClick={()=>{setGuideYs([]); setGuideYLabels({});}}>Clear</button>
-                  <label className="ml-auto flex items-center gap-2 pl-2"><input type="checkbox" className="h-4 w-4" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross</label>
-              </div>
+              {/* Guides 섹션: 좌측에서는 제거됨 */}
             </div>
-
-              {/* I²t Lifetime Graph */}
-              <div className="!mt-5 space-y-3 border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-semibold text-gray-600">I²t Lifetime Graph</h4>
-              </div>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" className="h-4 w-4" checked={showI2tGraph} onChange={(e)=>setShowI2tGraph(e.target.checked)} />
-                  <span>Show I²t Graph</span>
-                </label>
-                <div className="grid grid-cols-1 gap-3 text-sm">
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2"><input type="radio" name="lifeMode" checked={lifetimeMode==='I_mode'} onChange={()=>setLifetimeMode('I_mode')} /> I_mode (current multipliers)</label>
-                    <label className="flex items-center gap-2"><input type="radio" name="lifeMode" checked={lifetimeMode==='I2t_mode'} onChange={()=>setLifetimeMode('I2t_mode')} /> I²t_mode (I²t ratios)</label>
-              </div>
-                  <div className="grid grid-cols-1 gap-2">
-                    <label className="flex items-center gap-3">
-                      <span className="w-28 text-gray-600">N levels</span>
-                      <input
-                        className="flex-1 rounded-md border px-3 py-2"
-                        value={lifetimeCycles.join(', ')}
-                        onChange={(e)=>{
-                          const arr = e.target.value.split(',').map(s=>Number(s.trim())).filter(v=>isFinite(v)&&v>0);
-                          if (arr.length) setLifetimeCycles(arr);
-                        }}
-                      />
-                    </label>
-                    {lifetimeMode==='I_mode' ? (
-                      <label className="flex items-center gap-3">
-                        <span className="w-28 text-gray-600">Multipliers</span>
-                        <input
-                          className="flex-1 rounded-md border px-3 py-2"
-                          value={currentMultipliers.join(', ')}
-                          onChange={(e)=>{
-                            const arr = e.target.value.split(',').map(s=>Number(s.trim())).filter(v=>isFinite(v)&&v>0);
-                            if (arr.length) setCurrentMultipliers(arr);
-                          }}
-                        />
-                      </label>
-                    ) : (
-                      <label className="flex items-center gap-3">
-                        <span className="w-28 text-gray-600">I²t ratios</span>
-                        <input
-                          className="flex-1 rounded-md border px-3 py-2"
-                          value={lifetimeRatios.join(', ')}
-                          onChange={(e)=>{
-                            const arr = e.target.value.split(',').map(s=>Number(s.trim())).filter(v=>isFinite(v)&&v>0);
-                            if (arr.length) setLifetimeRatios(arr);
-                          }}
-                        />
-                      </label>
-                    )}
-                    <div className="text-xs text-gray-500">
-                      Active series의 T–C(Base) 곡선을 기준으로 수명 곡선을 생성합니다. I_mode: I²t= (m·I)²·t, I²t_mode: I²t = r · I²t_base.
-              </div>
-              </div>
-              </div>
-            </div>
-              </div>
-              </div>
+          </div>
             </>
           )}
         </aside>
 
         {/* Right: Canvas + 좌표 패널 */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 col-span-1 lg:col-span-2">
+        <div className={`grid grid-cols-1 gap-3 ${showI2tGraph ? "lg:grid-cols-2" : "lg:grid-cols-1"} col-span-1`}>
           {/* Original Graph */}
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="mb-4 h-6 text-base text-gray-600">
-              {hoverRef.current.x !== null ? (
-                <span className="font-mono">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
-              ) : <span>Hover over the graph area to see coordinates.</span>}
+          <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm">
+            {/* I²t 그래프 체크박스 - TC 그래프 위쪽 */}
+            <div className="mb-2 flex items-center gap-2">
+              <label className="flex items-center gap-2 text-xs font-semibold text-gray-700">
+                <input 
+                  type="checkbox" 
+                  className="h-4 w-4" 
+                  checked={showI2tGraph} 
+                  onChange={(e) => setShowI2tGraph(e.target.checked)} 
+                />
+                <span>Show I²t Lifetime Graph</span>
+              </label>
             </div>
+            <div className="mb-2 h-4 text-xs text-gray-600">
+              {hoverRef.current.x !== null ? (
+                <span className="font-mono text-xs">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
+              ) : <span className="text-xs">Hover over the graph area to see coordinates.</span>}
+            </div>
+            {/* 실수좌표 토글 (상단 표시는 제거됨 — Points 섹션 내 토글만 유지) */}
             <div className="overflow-hidden rounded-lg border border-gray-300">
             <canvas
               ref={canvasRef}
@@ -1219,12 +1177,143 @@ export default function App() {
                 onContextMenu={(e)=>{e.preventDefault(); if(pickAnchor) setPickAnchor(false);}}
             />
           </div>
+          {/* Points + Guides 래퍼: 좌우 배치 (항상 2열) */}
+          <div className="mt-2 grid grid-cols-2 gap-2 border-t border-gray-200 pt-2">
+          {/* Points 섹션 */}
+          <div className="col-span-1 grid grid-cols-1 gap-2">
+            {/* Points */}
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <div className="text-xs font-semibold text-gray-700">Points - Active series ({currentState.series[activeSeries].name})</div>
+                <label className="flex items-center gap-1 text-[11px] text-gray-700">
+                  <input type="checkbox" className="h-3 w-3" checked={showRealCoords} onChange={(e)=>setShowRealCoords(e.target.checked)} /> 실수좌표
+                </label>
         </div>
+              <div className="flex flex-wrap items-center gap-1.5 max-h-24 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+              {currentState.series[activeSeries].points.length === 0 ? (
+                <span className="text-xs text-gray-400">No points</span>
+              ) : currentState.series[activeSeries].points.map((p, idx) => (
+                <div key={idx} className="flex items-center gap-1 rounded border border-gray-300 px-2 py-0.5">
+                  <span className="text-[10px] text-gray-500">#{idx+1}</span>
+                    <input
+                    type="text"
+                    className="w-20 text-right text-xs font-mono border-0 bg-transparent focus:bg-white focus:border focus:border-blue-300 rounded px-1"
+                    value={showRealCoords ? fmtReal(p.x) : fmtReal(currentState.xLog ? Math.log10(Math.max(EPS, p.x)) : p.x)}
+                    onChange={(e)=>{
+                      const val = Number(e.target.value);
+                      if (isFinite(val) && val > 0) {
+                        updateState(prev => ({
+                          ...prev,
+                          series: prev.series.map((s, si) => si !== activeSeries ? s : ({
+                            ...s,
+                              points: s.points.map((pt, pi) => pi === idx ? { ...pt, x: (showRealCoords ? val : (currentState.xLog ? Math.pow(10, val) : val)) } : pt)
+                          }))
+                        }));
+                        setTick(t=>t+1);
+                      }
+                    }}
+                  />
+                  <span className="text-[10px] text-gray-400">,</span>
+                    <input
+                    type="text"
+                    className="w-20 text-right text-xs font-mono border-0 bg-transparent focus:bg-white focus:border focus:border-blue-300 rounded px-1"
+                    value={showRealCoords ? fmtReal(p.y) : fmtReal(currentState.yLog ? Math.log10(Math.max(EPS, p.y)) : p.y)}
+                    onChange={(e)=>{
+                      const val = Number(e.target.value);
+                      if (isFinite(val) && val > 0) {
+                        updateState(prev => ({
+                          ...prev,
+                          series: prev.series.map((s, si) => si !== activeSeries ? s : ({
+                            ...s,
+                              points: s.points.map((pt, pi) => pi === idx ? { ...pt, y: (showRealCoords ? val : (currentState.yLog ? Math.pow(10, val) : val)) } : pt)
+                          }))
+                        }));
+                        setTick(t=>t+1);
+                      }
+                    }}
+                  />
+                  <button
+                    className="ml-1 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] hover:bg-gray-300"
+                    onClick={() => {
+                      updateState(prev => ({
+                        ...prev,
+                        series: prev.series.map((s, si) => si !== activeSeries ? s : ({
+                          ...s,
+                          points: s.points.filter((_, pi) => pi !== idx)
+                        }))
+                      }));
+                      setTick(t=>t+1);
+                    }}
+                  >Del</button>
+      </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Guides 섹션 (입력/표시) */}
+            <div className="col-span-1 grid grid-cols-1 gap-2">
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <div className="text-xs font-semibold text-gray-700">Guides</div>
+                </div>
+                {/* X Guides 입력 */}
+                <div className="flex items-center gap-1">
+                  <span className="w-4 text-xs font-semibold text-gray-600">X</span>
+                  <input
+                    className="flex-grow rounded border px-1.5 py-0.5 text-xs"
+                    placeholder="1,000"
+                    value={guideInput}
+                    onChange={(e)=>setGuideInput(e.target.value)}
+                    onKeyDown={(e)=>{ if(e.key==="Enter"){ const raw=e.currentTarget.value.trim(); const n=Number(raw.replace(/,/g,"")); if(isFinite(n)&&n>0){ setGuideXs(g=>Array.from(new Set([...g,n]))); setGuideXLabels(m=>({...m,[n]:raw})); setGuideInput(""); } } }}
+                  />
+                  <button className="rounded bg-gray-200 px-1.5 py-0.5 text-xs hover:bg-gray-300" onClick={()=>{ const raw=guideInput.trim(); const n=Number(raw.replace(/,/g,"")); if(isFinite(n)&&n>0){ setGuideXs(g=>Array.from(new Set([...g,n]))); setGuideXLabels(m=>({...m,[n]:raw})); setGuideInput(""); } }}>Add</button>
+                  <button className="rounded bg-gray-200 px-1.5 py-0.5 text-xs hover:bg-gray-300" onClick={()=>{ setGuideXs([]); setGuideXLabels({}); }}>Clear</button>
+                  <label className="ml-auto flex items-center gap-1 pl-1 text-xs"><input type="checkbox" className="h-3 w-3" checked={showCrossFromX} onChange={(e)=>setShowCrossFromX(e.target.checked)} /> Cross</label>
+                </div>
+                {/* Y Guides 입력 */}
+                <div className="mt-1 flex items-center gap-1">
+                  <span className="w-4 text-xs font-semibold text-gray-600">Y</span>
+                  <input
+                    className="flex-grow rounded border px-1.5 py-0.5 text-xs"
+                    placeholder="10"
+                    value={guideYInput}
+                    onChange={(e)=>setGuideYInput(e.target.value)}
+                    onKeyDown={(e)=>{ if(e.key==="Enter"){ const raw=e.currentTarget.value.trim(); const n=Number(raw.replace(/,/g,"")); if(isFinite(n)&&n>0){ setGuideYs(g=>Array.from(new Set([...g,n]))); setGuideYLabels(m=>({...m,[n]:raw})); setGuideYInput(""); } } }}
+                  />
+                  <button className="rounded bg-gray-200 px-1.5 py-0.5 text-xs hover:bg-gray-300" onClick={()=>{ const raw=guideYInput.trim(); const n=Number(raw.replace(/,/g,"")); if(isFinite(n)&&n>0){ setGuideYs(g=>Array.from(new Set([...g,n]))); setGuideYLabels(m=>({...m,[n]:raw})); setGuideYInput(""); } }}>Add</button>
+                  <button className="rounded bg-gray-200 px-1.5 py-0.5 text-xs hover:bg-gray-300" onClick={()=>{ setGuideYs([]); setGuideYLabels({}); }}>Clear</button>
+                  <label className="ml-auto flex items-center gap-1 pl-1 text-xs"><input type="checkbox" className="h-3 w-3" checked={showCrossFromY} onChange={(e)=>setShowCrossFromY(e.target.checked)} /> Cross</label>
+                </div>
+
+                {/* 좌표 표시: "X=..., A: ..." 형식 (화살표 표기 제거) */}
+                <div className="mt-2 max-h-24 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+                  {guideRows.length === 0 ? (
+                    <span className="text-xs text-gray-400">No guides</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {guideRows.map((r, i) => (
+                        <div key={i} className="flex items-center gap-1 rounded border border-gray-300 px-2 py-0.5">
+                          <span className="text-[10px] text-gray-500">{r.kind}=</span>
+                          <span className="text-xs font-mono text-gray-700">{r.guideLabel}</span>
+                          <span className="text-[10px] text-gray-400">,</span>
+                          <span className="text-[10px] text-gray-500">{r.series}:</span>
+                          <span className="text-xs font-mono text-gray-700">{fmtReal(r.value)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+          </div>
+          </div>
+          </div>
 
           {/* I²t Lifetime Graph */}
           {showI2tGraph && (
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-              <div className="mb-4 h-6 text-base text-gray-600 font-semibold">I²t Lifetime Graph</div>
+            <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm">
+              <div className="mb-2 flex items-center justify-between h-4 text-xs text-gray-600 font-semibold"><span>I²t Lifetime Graph</span><label className="flex items-center gap-1 text-[11px]"><input type="checkbox" className="h-3 w-3" checked={i2tFixedRange} onChange={e=>setI2tFixedRange(e.target.checked)} /> 범위 고정( X:1e-3~1e4, Y:1e2~1e10 )</label></div>
               <div className="overflow-hidden rounded-lg border border-gray-300">
                 <canvas
                   ref={i2tCanvasRef}
@@ -1232,75 +1321,146 @@ export default function App() {
                   height={size.h}
                   className="block touch-none select-none"
                 />
-      </div>
+              </div>
+              {/* 모드/선택 UI */}
+              <div className="mt-2 space-y-2 border-t border-gray-200 pt-2">
+                <div className="flex items-center gap-3 text-xs">
+                  <label className="flex items-center gap-1"><input type="radio" className="h-3 w-3" name="lifeMode2" checked={lifetimeMode==='I_mode'} onChange={()=>setLifetimeMode('I_mode')} /> I mode</label>
+                  <label className="flex items-center gap-1"><input type="radio" className="h-3 w-3" name="lifeMode2" checked={lifetimeMode==='I2t_mode'} onChange={()=>setLifetimeMode('I2t_mode')} /> I²t mode</label>
+                </div>
+                <div className="text-xs font-semibold text-gray-700">N levels - Lifetime 선택:</div>
+                <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+                  {lifetimeCycles.map((cycle, idx) => (
+                    <label key={idx} className="flex items-center gap-1 rounded border border-gray-300 px-2 py-0.5 hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        className="h-3 w-3"
+                        checked={selectedLifetimeCycles.has(cycle)}
+                        onChange={(e) => {
+                          const newSet = new Set(selectedLifetimeCycles);
+                          if (e.target.checked) {
+                            newSet.add(cycle);
+                          } else {
+                            newSet.delete(cycle);
+                          }
+                          setSelectedLifetimeCycles(newSet);
+                        }}
+                      />
+                      <span className="text-xs">{cycle.toLocaleString()}</span>
+                    </label>
+                  ))}
+        </div>
+                <div className="flex items-center gap-3 text-[11px]"><label className="flex items-center gap-1"><input type="checkbox" className="h-3 w-3" checked={enterCurrents} onChange={(e)=>setEnterCurrents(e.target.checked)} /> 전류로 입력</label><span className="text-gray-500">{enterCurrents && `(base ${(LIFE_CURRENT_BASE/1000).toFixed(2)} kA / ${LIFE_CURRENT_BASE} A)`}</span></div>
+                <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+                  {lifetimeCycles.map((cycle, idx) => {
+                    const multiplier = currentMultipliers[idx] ?? 1.0;
+                    const ratio = lifetimeRatios[idx] ?? 1.0;
+                    return (
+                      <div key={idx} className="flex items-center gap-1 rounded border border-gray-300 px-2 py-0.5">
+                        <span className="text-xs text-gray-500">{cycle}:</span>
+                        {lifetimeMode === 'I_mode' ? (
+                          enterCurrents ? (
+                            <input
+                              type="text"
+                              className="w-20 text-xs font-mono border-0 bg-transparent focus:bg-white focus:border focus:border-blue-300 rounded px-1"
+                              value={currentInputs[idx] ?? (multiplier * LIFE_CURRENT_BASE).toFixed(3)}
+                              onChange={(e)=>{
+                                const v = e.target.value; setCurrentInputs(s=>({...s, [idx]: v}));
+                                const n = Number(v); if(isFinite(n) && n>0){
+                                  const newMultipliers = [...currentMultipliers]; newMultipliers[idx] = n / LIFE_CURRENT_BASE; setCurrentMultipliers(newMultipliers); setTick(t=>t+1);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              className="w-16 text-xs font-mono border-0 bg-transparent focus:bg-white focus:border focus:border-blue-300 rounded px-1"
+                              value={multiplierInputs[idx] ?? multiplier.toFixed(3)}
+                              onChange={(e)=>{
+                                const v = e.target.value; setMultiplierInputs(s=>({...s, [idx]: v}));
+                                const n = Number(v); if(isFinite(n) && n>0){
+                                  const newMultipliers = [...currentMultipliers]; newMultipliers[idx] = n; setCurrentMultipliers(newMultipliers); setTick(t=>t+1);
+                                }
+                              }}
+                            />
+                          )
+                        ) : (
+                          <input
+                            type="text"
+                            className="w-16 text-xs font-mono border-0 bg-transparent focus:bg-white focus:border focus:border-blue-300 rounded px-1"
+                            value={(ratio).toFixed(3)}
+                            onChange={(e)=>{
+                              const n = Number(e.target.value); if(isFinite(n) && n>0){ const newRatios=[...lifetimeRatios]; newRatios[idx]=n; setLifetimeRatios(newRatios); setTick(t=>t+1);} }}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 수명 만족도 계산기 (실제 전류/시간 입력) */}
+              <div className="mt-2 space-y-2 border-t border-gray-200 pt-2">
+                <div className="text-xs font-semibold text-gray-700">수명 만족도 계산</div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <label className="flex items-center gap-1">I(A)<input type="text" className="w-24 rounded border px-1 py-0.5 text-xs" value={lifeIInput} onChange={(e)=>{ const v=e.target.value; setLifeIInput(v); const n = Number(v); if(isFinite(n) && n>=0) setLifeCheckI(n); }} /></label>
+                  <label className="flex items-center gap-1">t(s)<input type="text" className="w-24 rounded border px-1 py-0.5 text-xs" value={lifeTInput} onChange={(e)=>{ const v=e.target.value; setLifeTInput(v); const n = Number(v); if(isFinite(n) && n>=0) setLifeCheckT(n); }} /></label>
+                  <span className="text-[11px] text-gray-500">입력 I²t = { (isFinite(lifeCheckI)&&isFinite(lifeCheckT)&&lifeCheckI>0&&lifeCheckT>0? (lifeCheckI*lifeCheckI*lifeCheckT).toExponential(2) : '-') }</span>
+                </div>
+                <div className="text-xs">
+                  {(()=>{
+                    const s = currentState.series[activeSeries];
+                    if (!s || s.points.length < 2 || !(lifeCheckI>0) || !(lifeCheckT>0)) return '값을 입력하세요.';
+                    const samples = s.points.map(p=>({t:p.y,i:p.x})).filter(v=>v.t>0&&v.i>0).sort((a,b)=>a.t-b.t);
+                    if (samples.length<2) return '데이터가 부족합니다.';
+                    const base = samples.map(x=>({x:x.t, y:(x.i*x.i)*x.t}));
+                    const interp = (tx:number)=>{
+                      for(let i=0;i<base.length-1;i++){
+                        const a=base[i], b=base[i+1];
+                        if((a.x<=tx&&tx<=b.x)||(b.x<=tx&&tx<=a.x)){
+                          const t=(tx-a.x)/((b.x-a.x)||1e-12); return a.y + t*(b.y-a.y);
+                        }
+                      }
+                      return NaN;
+                    };
+                    const yb = interp(lifeCheckT); if (!isFinite(yb)) return 't 범위를 벗어났습니다.';
+                    const inputY = lifeCheckI*lifeCheckI*lifeCheckT;
+                    const table = lifetimeCycles
+                      .map((cy, idx) => ({
+                        N: cy,
+                        enabled: selectedLifetimeCycles.has(cy),
+                        y: yb * (lifetimeMode==='I_mode' ? Math.pow(currentMultipliers[idx]??1,2) : (lifetimeRatios[idx]??1))
+                      }))
+                      .filter(r=>r.enabled)
+                      // 보간은 같은 t에서의 I²t(y) 축으로 이웃을 잡아야 정확함 → y로 정렬
+                      .sort((a,b)=>a.y-b.y);
+                    if (table.length === 0) return '선택된 수명 곡선이 없습니다.';
+
+                    let Nest: number | null = null;
+                    if (inputY <= table[0].y) {
+                      Nest = table[0].N;
+                    } else if (inputY >= table[table.length-1].y) {
+                      Nest = table[table.length-1].N;
+                    } else {
+                      for (let i=0;i<table.length-1;i++){
+                        const a = table[i], b = table[i+1];
+                        if (a.y <= inputY && inputY <= b.y) {
+                          const f = (inputY - a.y) / ((b.y - a.y) || 1e-12);
+                          Nest = a.N + f * (b.N - a.N);
+                          break;
+                        }
+                      }
+                    }
+                    const hint = (Nest!=null && Nest>=10000 && Nest<=100000) ? ' (1만~10만 회 구간, 보간값)' : '';
+                    return Nest!=null ? `추정 만족 수명: N≈${Math.round(Nest).toLocaleString()}회${hint}` : '보간에 실패했습니다.';
+                  })()}
+                </div>
+              </div>
             </div>
           )}
         </div>
 
-        {/* 좌표 패널 */}
-        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm col-span-1 lg:col-span-2">
-          <div className="flex flex-col gap-6">
-            {/* Points Table */}
-            <div className="rounded-lg border border-gray-200">
-              <div className="border-b px-4 py-2 font-semibold text-gray-700">Points</div>
-              <div className="max-h-64 overflow-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="sticky top-0 bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Series</th>
-                      <th className="px-3 py-2 text-right">X</th>
-                      <th className="px-3 py-2 text-right">Y</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pointRows.length === 0 ? (
-                      <tr><td className="px-3 py-2 text-gray-400" colSpan={3}>No points</td></tr>
-                    ) : pointRows.map((r, i) => (
-                      <tr key={i} className="odd:bg-white even:bg-gray-50">
-                        <td className="px-3 py-1">{r.series}</td>
-                        <td className="px-3 py-1 text-right font-mono whitespace-nowrap">{fmtReal(r.x)}</td>
-                        <td className="px-3 py-1 text-right font-mono whitespace-nowrap">{fmtReal(r.y)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-      </div>
-            </div>
-
-            {/* Guides Table */}
-            <div className="rounded-lg border border-gray-200">
-              <div className="border-b px-4 py-2 font-semibold text-gray-700">Guides</div>
-              <div className="max-h-64 overflow-auto overflow-x-auto">
-                <table className="min-w-full text-sm table-fixed">
-                  <thead className="sticky top-0 bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left w-28">Type</th>
-                      <th className="px-3 py-2 text-right w-40">Guide</th>
-                      <th className="px-3 py-2 text-left w-40">Series</th>
-                      <th className="px-3 py-2 text-right w-36">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {guideRows.length === 0 ? (
-                      <tr><td className="px-3 py-2 text-gray-400" colSpan={4}>No guides</td></tr>
-                    ) : guideRows.map((g, i) => (
-                      <tr key={i} className="odd:bg-white even:bg-gray-50">
-                        <td className="px-3 py-1 w-28">{g.kind === "X" ? "X-guide → y" : "Y-guide → x"}</td>
-                        <td className="px-3 py-1 text-right font-mono w-40 whitespace-nowrap">
-                          {g.guideLabel}   {/* 입력 원문 그대로 */}
-                        </td>
-                        <td className="px-3 py-1 w-40">{g.series}</td>
-                        <td className="px-3 py-1 text-right font-mono w-36 whitespace-nowrap">
-                          {fmtReal(g.value)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-        </div>
-            </div>
-          </div>
-        </div>
+        {/* (삭제됨) 기존 하단 좌표 패널 대체 완료 */}
       </main>
 
       {toast && <div className="fixed bottom-6 right-6 rounded-xl bg-gray-900 px-5 py-3 text-lg text-white shadow-lg">{toast.msg}</div>}
