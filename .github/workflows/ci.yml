@@ -10,9 +10,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: log-digitizer-vite
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,10 +22,12 @@ jobs:
           cache-dependency-path: log-digitizer-vite/package-lock.json
 
       - name: Install dependencies
+        working-directory: log-digitizer-vite
         run: |
           npm ci || npm install --no-fund --no-audit
 
       - name: Build
+        working-directory: log-digitizer-vite
         run: npm run build
 
       - name: Upload build artifact

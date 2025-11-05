@@ -11,21 +11,27 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: log-digitizer-vite
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
           cache-dependency-path: log-digitizer-vite/package-lock.json
 
-      - name: Install deps (in app dir)
+      - name: Verify Node.js and npm
+        run: |
+          node --version
+          npm --version
+          which npm
+
+      - name: Install dependencies
         working-directory: log-digitizer-vite
-        run: npm ci || npm install --no-fund --no-audit
+        run: |
+          npm ci || npm install --no-fund --no-audit
 
       - name: Build (Vite)
         working-directory: log-digitizer-vite
