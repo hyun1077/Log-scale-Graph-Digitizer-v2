@@ -20,14 +20,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+          cache-dependency-path: log-digitizer-vite/package-lock.json
 
       - name: Install deps (in app dir)
-        run: npm ci || npm i --no-fund --no-audit
+        working-directory: log-digitizer-vite
+        run: npm ci || npm install --no-fund --no-audit
 
       - name: Build (Vite)
+        working-directory: log-digitizer-vite
         run: npm run build
 
       - name: SPA 404 fallback
+        working-directory: log-digitizer-vite
         run: cp dist/index.html dist/404.html
 
       - name: Publish to /docs (repo root)
