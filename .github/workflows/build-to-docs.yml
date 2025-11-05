@@ -35,6 +35,8 @@ jobs:
 
       - name: Build (Vite)
         working-directory: log-digitizer-vite
+        env:
+          GITHUB_PAGES: true
         run: npm run build
 
       - name: SPA 404 fallback
