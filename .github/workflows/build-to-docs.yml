@@ -32,12 +32,16 @@ jobs:
         working-directory: log-digitizer-vite
         run: |
           npm ci || npm install --no-fund --no-audit
+          npm --version
+          which npm
 
       - name: Build (Vite)
         working-directory: log-digitizer-vite
         env:
           GITHUB_PAGES: true
-        run: npm run build
+        run: |
+          echo "Building with base path: /Log-scale-Graph-Digitizer-v2/"
+          npm run build || npx vite build
 
       - name: SPA 404 fallback
         working-directory: log-digitizer-vite

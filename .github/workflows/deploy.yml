@@ -1,9 +1,10 @@
 name: Deploy Vite app to GitHub Pages
 
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
+# DISABLED: Using build-to-docs.yml instead for /docs folder deployment
+# on:
+#   push:
+#     branches: [ main, master ]
+#   workflow_dispatch:
 
 permissions:
   contents: read
