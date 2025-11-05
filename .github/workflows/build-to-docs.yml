@@ -41,7 +41,7 @@ jobs:
           GITHUB_PAGES: true
         run: |
           echo "Building with base path: /Log-scale-Graph-Digitizer-v2/"
-          npm run build || npx vite build
+          npm run build
 
       - name: SPA 404 fallback
         working-directory: log-digitizer-vite
