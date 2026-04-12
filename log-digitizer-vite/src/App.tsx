@@ -72,6 +72,8 @@ export default function App() {
   const [loginError, setLoginError] = useState(false);
   const [selectedLifetimeCycles, setSelectedLifetimeCycles] = useState(new Set([1,10,100,1000,10000,100000,1000000]));
   const [showRealCoords, setShowRealCoords] = useState(true);
+  /** 시리즈 간 교차점: 캔버스 마커 + 우측 패널 */
+  const [showIntersectionMarkers, setShowIntersectionMarkers] = useState(true);
   const [calEnabledByBg, setCalEnabledByBg] = useState(Array(MAX_BG).fill(false));
   const [calClipByBg, setCalClipByBg] = useState(Array(MAX_BG).fill(false));
   const [calPixelsByBg, setCalPixelsByBg] = useState<CalPixels[]>(Array(MAX_BG).fill(null).map(() => ({ x1: null, x2: null, y1: null, y2: null })));
@@ -124,7 +126,7 @@ export default function App() {
   const [saveFormName, setSaveFormName] = useState('');
   const [libFilter, setLibFilter] = useState('');
 
-  const [magnifyOn, setMagnifyOn] = useState(false);
+  const [magnifyOn, setMagnifyOn] = useState(true);
   const [magnifyFactor] = useState(3);
 
   const [bgList, setBgList] = useState(Array(MAX_BG).fill(null));
@@ -287,38 +289,41 @@ export default function App() {
     return { dx, dy, dw, dh, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
   };
 
-  /** 캘리브로 찍은 이미지 위 점을 Axes 패널의 격자(축 한계) 좌표계에 맞게 배경 스케일·이동 + 캘리브 픽셀 동기화 */
-  const fitImageToAxesCalibration = bgIdx => {
+  /**
+   * Axes Min/Max 격자에 맞춘 배경 변환 + 캘리브 픽셀. silent=true면 실패 시 null만 반환(축 변경 자동 맞춤용).
+   * @returns {{ sx, sy, offX, offY, calPixels: CalPixels } | null}
+   */
+  const computeCalibrationFitToAxes = (bgIdx, silent) => {
     const st = currentState;
-    if (!st) return;
+    if (!st) return null;
     const img = bgRefs.current[bgIdx];
     if (!img || !bgList[bgIdx]) {
-      notify('이 슬롯에 이미지를 먼저 불러오세요', 'err');
-      return;
+      if (!silent) notify('이 슬롯에 이미지를 먼저 불러오세요', 'err');
+      return null;
     }
     const cp = calPixelsByBg[bgIdx];
     const cv = calValuesByBg[bgIdx];
     const vx1 = Number(cv.x1), vx2 = Number(cv.x2), vy1 = Number(cv.y1), vy2 = Number(cv.y2);
     if (!cp?.x1 || !cp?.x2 || !cp?.y1 || !cp?.y2 || ![vx1, vx2, vy1, vy2].every(Number.isFinite)) {
-      notify('캘리브 4점을 찍고 숫자 값을 모두 입력하세요', 'err');
-      return;
+      if (!silent) notify('캘리브 4점을 찍고 숫자 값을 모두 입력하세요', 'err');
+      return null;
     }
     if ((st.xLog && (vx1 <= 0 || vx2 <= 0)) || (st.yLog && (vy1 <= 0 || vy2 <= 0))) {
-      notify('로그 축에는 양수 값만 사용할 수 있습니다', 'err');
-      return;
+      if (!silent) notify('로그 축에는 양수 값만 사용할 수 있습니다', 'err');
+      return null;
     }
     const { dx, dy, dw, dh } = drawRectAndAnchor(bgIdx);
     if (Math.abs(dw) < EPS || Math.abs(dh) < EPS) {
-      notify('이미지 표시 크기가 너무 작습니다', 'err');
-      return;
+      if (!silent) notify('이미지 표시 크기가 너무 작습니다', 'err');
+      return null;
     }
     const fu1 = (cp.x1.px - dx) / dw;
     const fu2 = (cp.x2.px - dx) / dw;
     const fv1 = (cp.y1.py - dy) / dh;
     const fv2 = (cp.y2.py - dy) / dh;
     if (Math.abs(fu2 - fu1) < 1e-5 || Math.abs(fv2 - fv1) < 1e-5) {
-      notify('X1·X2 또는 Y1·Y2가 이미지에서 너무 가깝습니다', 'err');
-      return;
+      if (!silent) notify('X1·X2 또는 Y1·Y2가 이미지에서 너무 가깝습니다', 'err');
+      return null;
     }
 
     const r = innerRect();
@@ -329,8 +334,8 @@ export default function App() {
       ymax: tVal(st.yMax, st.yLog),
     };
     if (!(mm.xmax > mm.xmin && mm.ymax > mm.ymin)) {
-      notify('Axes 축 범위(X/Y Min·Max)를 확인하세요', 'err');
-      return;
+      if (!silent) notify('Axes 축 범위(X/Y Min·Max)를 확인하세요', 'err');
+      return null;
     }
     const pxAt = tx => r.x + ((tx - mm.xmin) / (mm.xmax - mm.xmin)) * r.w;
     const pyAt = ty => r.y + r.h - ((ty - mm.ymin) / (mm.ymax - mm.ymin)) * r.h;
@@ -345,12 +350,12 @@ export default function App() {
     const dyNew = pyT1 - fv1 * dhNew;
 
     if (!Number.isFinite(dwNew) || !Number.isFinite(dhNew) || dwNew <= 1 || dhNew <= 1) {
-      notify('맞춤 계산에 실패했습니다. 점 위치와 축 값이 서로 맞는지 확인하세요', 'err');
-      return;
+      if (!silent) notify('맞춤 계산에 실패했습니다. 점 위치와 축 값이 서로 맞는지 확인하세요', 'err');
+      return null;
     }
     if (dwNew < 0 || dhNew < 0) {
-      notify('X1이 X2보다 작은 데이터(왼쪽)·Y 방향이 화면과 일치하는지 확인하세요', 'err');
-      return;
+      if (!silent) notify('X1이 X2보다 작은 데이터(왼쪽)·Y 방향이 화면과 일치하는지 확인하세요', 'err');
+      return null;
     }
 
     const base = baseRect(bgIdx);
@@ -382,21 +387,68 @@ export default function App() {
       return { px: dxAdj + fu * dwAdj, py: dyAdj + fv * dhAdj };
     };
 
+    return {
+      sx, sy, offX, offY,
+      calPixels: {
+        x1: remap(cp.x1),
+        x2: remap(cp.x2),
+        y1: remap(cp.y1),
+        y2: remap(cp.y2),
+      },
+    };
+  };
+
+  /** 캘리브로 찍은 이미지 위 점을 Axes 패널의 격자(축 한계) 좌표계에 맞게 배경 스케일·이동 + 캘리브 픽셀 동기화 */
+  const fitImageToAxesCalibration = bgIdx => {
+    const res = computeCalibrationFitToAxes(bgIdx, false);
+    if (!res) return;
+    const { sx, sy, offX, offY, calPixels } = res;
     updateState(prev => {
       const nxf = [...prev.bgXform];
       const cur = nxf[bgIdx] || { sx: 1, sy: 1, offX: 0, offY: 0 };
       nxf[bgIdx] = { ...cur, sx, sy, offX, offY };
       return { ...prev, bgXform: nxf };
     });
-    setCalPixelsForBg(bgIdx, {
-      x1: remap(cp.x1),
-      x2: remap(cp.x2),
-      y1: remap(cp.y1),
-      y2: remap(cp.y2),
-    });
+    setCalPixelsForBg(bgIdx, calPixels);
     setTick(t => t + 1);
     notify('Axes 격자에 이미지·캘리브 점을 맞췄습니다');
   };
+
+  /** Axes 변경 시: 캘리브 켜진 슬롯마다 이미지·기준점을 새 격자에 맞춤(히스토리 추가 없음) */
+  const axesCalRefitKeyRef = useRef(null);
+  useEffect(() => {
+    if (!currentState) return;
+    const key = `${currentState.xMin}|${currentState.xMax}|${currentState.yMin}|${currentState.yMax}|${currentState.xLog}|${currentState.yLog}`;
+    if (axesCalRefitKeyRef.current === null) {
+      axesCalRefitKeyRef.current = key;
+      return;
+    }
+    if (axesCalRefitKeyRef.current === key) return;
+    axesCalRefitKeyRef.current = key;
+
+    const nextXf = [...currentState.bgXform];
+    const nextCal = calPixelsByBg.map(p => ({
+      x1: p.x1 ? { ...p.x1 } : null,
+      x2: p.x2 ? { ...p.x2 } : null,
+      y1: p.y1 ? { ...p.y1 } : null,
+      y2: p.y2 ? { ...p.y2 } : null,
+    }));
+    let any = false;
+    for (let bgIdx = 0; bgIdx < MAX_BG; bgIdx++) {
+      if (!calEnabledByBg[bgIdx]) continue;
+      const res = computeCalibrationFitToAxes(bgIdx, true);
+      if (!res) continue;
+      const cur = nextXf[bgIdx] || { sx: 1, sy: 1, offX: 0, offY: 0 };
+      nextXf[bgIdx] = { ...cur, sx: res.sx, sy: res.sy, offX: res.offX, offY: res.offY };
+      nextCal[bgIdx] = res.calPixels;
+      any = true;
+    }
+    if (!any) return;
+    updateStateInPlace(p => ({ ...p, bgXform: nextXf }));
+    setCalPixelsByBg(nextCal);
+    setTick(t => t + 1);
+    /* 축 6필드가 바뀐 뒤에만 위 로직이 실행되도록, cal 픽셀 갱신으로 인한 재실행은 key 동일로 상단에서 return */
+  }, [currentState?.xMin, currentState?.xMax, currentState?.yMin, currentState?.yMax, currentState?.xLog, currentState?.yLog, calEnabledByBg, calPixelsByBg, calValuesByBg]);
 
   /* image load — 파일·캡처·URL 등 data URL / blob URL 공통 */
   const loadImageFromSrc = (idx, src) => {
@@ -887,7 +939,7 @@ export default function App() {
     }
 
     /* series intersections */
-    const intersections = computeSeriesIntersections();
+    const intersections = showIntersectionMarkers ? computeSeriesIntersections() : [];
     if (intersections.length>0) {
       const rr=innerRect(); ctx.save(); ctx.beginPath(); ctx.rect(rr.x,rr.y,rr.w,rr.h); ctx.clip();
       for (const inter of intersections) {
@@ -939,22 +991,24 @@ export default function App() {
       }
       ctx.restore();
     };
-    if (calEnabled && calPixels.x1 && calPixels.x2 && calPixels.y1 && calPixels.y2) {
-      const left = Math.min(calPixels.x1.px, calPixels.x2.px);
-      const right = Math.max(calPixels.x1.px, calPixels.x2.px);
-      const top = Math.min(calPixels.y1.py, calPixels.y2.py);
-      const bottom = Math.max(calPixels.y1.py, calPixels.y2.py);
-      ctx.save();
-      ctx.strokeStyle = "#0EA5E9";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([7,4]);
-      ctx.strokeRect(left, top, right - left, bottom - top);
-      ctx.restore();
+    if (calEnabled) {
+      if (calPixels.x1 && calPixels.x2 && calPixels.y1 && calPixels.y2) {
+        const left = Math.min(calPixels.x1.px, calPixels.x2.px);
+        const right = Math.max(calPixels.x1.px, calPixels.x2.px);
+        const top = Math.min(calPixels.y1.py, calPixels.y2.py);
+        const bottom = Math.max(calPixels.y1.py, calPixels.y2.py);
+        ctx.save();
+        ctx.strokeStyle = "#0EA5E9";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([7,4]);
+        ctx.strokeRect(left, top, right - left, bottom - top);
+        ctx.restore();
+      }
+      drawCal(calPixels.x1, "X1", "#2563EB");
+      drawCal(calPixels.x2, "X2", "#2563EB");
+      drawCal(calPixels.y1, "Y1", "#DC2626");
+      drawCal(calPixels.y2, "Y2", "#DC2626");
     }
-    drawCal(calPixels.x1, "X1", "#2563EB");
-    drawCal(calPixels.x2, "X2", "#2563EB");
-    drawCal(calPixels.y1, "Y1", "#DC2626");
-    drawCal(calPixels.y2, "Y2", "#DC2626");
 
     /* legend */
     ctx.save();
@@ -983,7 +1037,7 @@ export default function App() {
   }, [currentState,activeBg,showBgs,opacityBgs,keepAspect,anchorMode,pickAnchor,hoverHandle,
       showPoints,connectLines,lineAlpha,lineWidth,smoothLines,smoothAlpha,ptRadius,
       guideXs,guideYs,showCrossFromX,showCrossFromY,magnifyOn,selectedPoint,tick,minBreakCurrents,
-      calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,calPick,selectedCalPoint]);
+      calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,calPick,selectedCalPoint,showIntersectionMarkers]);
 
   /* I2t graph render */
   useEffect(() => {
@@ -1284,6 +1338,7 @@ export default function App() {
     i2t:{show:showI2tGraph,mode:lifetimeMode,cycles:lifetimeCycles,multipliers:currentMultipliers,ratios:lifetimeRatios},
     minBreakCurrents,
     calibrationByBg:{enabled:calEnabledByBg,clip:calClipByBg,pixels:calPixelsByBg,values:calValuesByBg},
+    ui:{ showRealCoords, showIntersectionMarkers, magnifyOn },
   });
   const applyPreset = p => {
     try {
@@ -1332,6 +1387,10 @@ export default function App() {
         const vv = Array(MAX_BG).fill(null).map((_,i)=>i===0?(p.calibration.values ?? {x1:"",x2:"",y1:"",y2:""}):{x1:"",x2:"",y1:"",y2:""});
         setCalEnabledByBg(en); setCalClipByBg(cp); setCalPixelsByBg(px); setCalValuesByBg(vv);
       }
+      setShowRealCoords(p.ui?.showRealCoords !== false);
+      setShowIntersectionMarkers(p.ui?.showIntersectionMarkers !== false);
+      setMagnifyOn(p.ui?.magnifyOn !== false);
+      axesCalRefitKeyRef.current = `${next.xMin}|${next.xMax}|${next.yMin}|${next.yMax}|${!!next.xLog}|${!!next.yLog}`;
       updateState(()=>next,true); notify("Preset loaded");
     } catch { notify("Invalid preset","err"); }
   };
@@ -1346,7 +1405,7 @@ export default function App() {
     if (h.startsWith("#s=")) { try{applyPreset(JSON.parse(decodeURIComponent(escape(atob(h.slice(3))))));return;}catch{} }
     try{const raw=localStorage.getItem("digitizer:auto");if(raw)applyPreset(JSON.parse(raw));}catch{}
   }, []);
-  useEffect(() => { try{localStorage.setItem("digitizer:auto",JSON.stringify(serialize()));}catch{} }, [currentState,guideXs,guideYs,showCrossFromX,showCrossFromY,keepAspect,showBgs,opacityBgs,activeBg,calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg]);
+  useEffect(() => { try{localStorage.setItem("digitizer:auto",JSON.stringify(serialize()));}catch{} }, [currentState,guideXs,guideYs,showCrossFromX,showCrossFromY,keepAspect,showBgs,opacityBgs,activeBg,calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,showRealCoords,showIntersectionMarkers,magnifyOn]);
 
   if (!currentState) return <div className="flex h-screen items-center justify-center">Loading...</div>;
 
@@ -1472,7 +1531,8 @@ export default function App() {
   const guideRows = [];
   for (const gx of guideXs) { const label=guideXLabels[gx]??fmtReal(gx); currentState.series.forEach(s=>guideRows.push({kind:"X",guide:gx,guideLabel:label,series:s.name,value:yAtX(s.points,gx)})); }
   for (const gy of guideYs) { const label=guideYLabels[gy]??fmtReal(gy); currentState.series.forEach(s=>guideRows.push({kind:"Y",guide:gy,guideLabel:label,series:s.name,value:xAtY(s.points,gy)})); }
-  const seriesIntersections = computeSeriesIntersections();
+  const seriesIntersectionsAll = computeSeriesIntersections();
+  const seriesIntersections = showIntersectionMarkers ? seriesIntersectionsAll : [];
 
   return (
     <div className="min-h-screen bg-gray-100 text-gray-800 font-sans antialiased">
@@ -1884,27 +1944,35 @@ export default function App() {
               </div>
             </div>
 
-            {/* intersections panel */}
-            {seriesIntersections.length>0&&(
+            {/* intersections panel — 시리즈 쌍별 교차; 표시 on/off */}
+            {seriesIntersectionsAll.length>0&&(
               <div className="mt-2 border-t border-orange-200 pt-2">
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="inline-block h-3 w-3 rounded-full bg-orange-500"/>
-                  <span className="text-xs font-semibold text-orange-700">Line Intersections ({seriesIntersections.length})</span>
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-3 w-3 rounded-full bg-orange-500"/>
+                    <span className="text-xs font-semibold text-orange-700">시리즈 교차점 ({seriesIntersectionsAll.length})</span>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-[10px] text-gray-600">
+                    <input type="checkbox" className="h-3 w-3" checked={showIntersectionMarkers} onChange={e=>setShowIntersectionMarkers(e.target.checked)}/>
+                    캔버스·목록 표시
+                  </label>
                 </div>
-                <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto" style={{scrollbarWidth:"thin"}}>
-                  {seriesIntersections.map((inter,i)=>{
-                    const s1=currentState.series[inter.si],s2=currentState.series[inter.sj];
-                    return (
-                      <div key={i} className="flex items-center gap-1 rounded border border-orange-300 bg-orange-50 px-2 py-0.5">
-                        <span className="text-[10px] font-bold" style={{color:s1.color}}>{s1.name}</span>
-                        <span className="text-[10px] text-orange-500">x</span>
-                        <span className="text-[10px] font-bold" style={{color:s2.color}}>{s2.name}</span>
-                        <span className="text-[10px] text-gray-400 mx-0.5">:</span>
-                        <span className="text-xs font-mono">({fmtReal(inter.x)}, {fmtReal(inter.y)})</span>
-                      </div>
-                    );
-                  })}
-                </div>
+                {showIntersectionMarkers&&(
+                  <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto" style={{scrollbarWidth:"thin"}}>
+                    {seriesIntersectionsAll.map((inter,i)=>{
+                      const s1=currentState.series[inter.si],s2=currentState.series[inter.sj];
+                      return (
+                        <div key={i} className="flex items-center gap-1 rounded border border-orange-300 bg-orange-50 px-2 py-0.5">
+                          <span className="text-[10px] font-bold" style={{color:s1.color}}>{s1.name}</span>
+                          <span className="text-[10px] text-orange-500">×</span>
+                          <span className="text-[10px] font-bold" style={{color:s2.color}}>{s2.name}</span>
+                          <span className="text-[10px] text-gray-400 mx-0.5">:</span>
+                          <span className="text-xs font-mono">({fmtReal(inter.x)}, {fmtReal(inter.y)})</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
