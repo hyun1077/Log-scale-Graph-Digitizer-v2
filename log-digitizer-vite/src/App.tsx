@@ -1,5 +1,5 @@
 /* @ts-nocheck */
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { type Sample } from "./lib/i2t";
 
 /**
@@ -20,6 +20,10 @@ type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
 type SelectedPoint = { seriesIndex: number; pointIndex: number } | null;
+type CalPickKey = "x1" | "x2" | "y1" | "y2" | null;
+type CalPixel = { px: number; py: number } | null;
+type CalPixels = { x1: CalPixel; x2: CalPixel; y1: CalPixel; y2: CalPixel };
+type CalValues = { x1: string; x2: string; y1: string; y2: string };
 
 type AppState = {
   xMin: number; xMax: number; yMin: number; yMax: number;
@@ -67,7 +71,13 @@ export default function App() {
   const [loginPwInput, setLoginPwInput] = useState("");
   const [loginError, setLoginError] = useState(false);
   const [selectedLifetimeCycles, setSelectedLifetimeCycles] = useState(new Set([1,10,100,1000,10000,100000,1000000]));
-  const [showRealCoords, setShowRealCoords] = useState(false);
+  const [showRealCoords, setShowRealCoords] = useState(true);
+  const [calEnabledByBg, setCalEnabledByBg] = useState(Array(MAX_BG).fill(false));
+  const [calClipByBg, setCalClipByBg] = useState(Array(MAX_BG).fill(false));
+  const [calPixelsByBg, setCalPixelsByBg] = useState<CalPixels[]>(Array(MAX_BG).fill(null).map(() => ({ x1: null, x2: null, y1: null, y2: null })));
+  const [calValuesByBg, setCalValuesByBg] = useState<CalValues[]>(Array(MAX_BG).fill(null).map(() => ({ x1: "", x2: "", y1: "", y2: "" })));
+  const [calPick, setCalPick] = useState<CalPickKey>(null);
+  const [selectedCalPoint, setSelectedCalPoint] = useState<CalPickKey>(null);
   const LIFE_CURRENT_BASE = 3050;
   const [lifeCheckI, setLifeCheckI] = useState(0);
   const [lifeCheckT, setLifeCheckT] = useState(0);
@@ -97,7 +107,7 @@ export default function App() {
   const [showPoints, setShowPoints] = useState(true);
 
   /* min break currents - per series, dashes line below threshold */
-  const [minBreakCurrents, setMinBreakCurrents] = useState([null, null]);
+  const [minBreakCurrents, setMinBreakCurrents] = useState(() => Array(MAX_SERIES).fill(null));
   const [minBreakInputs, setMinBreakInputs] = useState({});
 
   /* spreadsheet table edit state */
@@ -122,6 +132,10 @@ export default function App() {
   const [showBgs, setShowBgs] = useState(Array(MAX_BG).fill(true));
   const [opacityBgs, setOpacityBgs] = useState([...BG_DEFAULT_OPACITY]);
   const [activeBg, setActiveBg] = useState(0);
+  const calEnabled = calEnabledByBg[activeBg];
+  const calClip = calClipByBg[activeBg];
+  const calPixels = calPixelsByBg[activeBg];
+  const calValues = calValuesByBg[activeBg];
 
   const [anchorMode] = useState("custom");
   const [pickAnchor, setPickAnchor] = useState(false);
@@ -183,10 +197,11 @@ export default function App() {
   }, []);
 
   /* utils */
+  const notifyTimerRef = useRef<number | null>(null);
   const notify = (msg, kind = "ok") => {
     setToast({ msg, kind });
-    window.clearTimeout(notify._t);
-    notify._t = window.setTimeout(() => setToast(null), 1500);
+    if (notifyTimerRef.current) window.clearTimeout(notifyTimerRef.current);
+    notifyTimerRef.current = window.setTimeout(() => setToast(null), 1500);
   };
 
   const innerRect = () => ({ x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom });
@@ -200,17 +215,43 @@ export default function App() {
     ymax: tVal(currentState.yMax, currentState.yLog),
   });
 
+  const calModel = () => {
+    if (!calEnabled) return null;
+    const x1 = calPixels.x1, x2 = calPixels.x2, y1 = calPixels.y1, y2 = calPixels.y2;
+    if (!x1 || !x2 || !y1 || !y2) return null;
+    const vx1 = Number(calValues.x1), vx2 = Number(calValues.x2), vy1 = Number(calValues.y1), vy2 = Number(calValues.y2);
+    if (![vx1, vx2, vy1, vy2].every(Number.isFinite)) return null;
+    if ((currentState.xLog && (vx1 <= 0 || vx2 <= 0)) || (currentState.yLog && (vy1 <= 0 || vy2 <= 0))) return null;
+    const tx1 = tVal(vx1, currentState.xLog), tx2 = tVal(vx2, currentState.xLog);
+    const ty1 = tVal(vy1, currentState.yLog), ty2 = tVal(vy2, currentState.yLog);
+    if (Math.abs(tx2 - tx1) < EPS || Math.abs(ty2 - ty1) < EPS) return null;
+    if (Math.abs(x2.px - x1.px) < EPS || Math.abs(y2.py - y1.py) < EPS) return null;
+    return { tx1, tx2, ty1, ty2, px1: x1.px, px2: x2.px, py1: y1.py, py2: y2.py };
+  };
   const dataToPixel = (x, y) => {
-    const r = innerRect(), mm = tMinMax();
     const tx = tVal(x, currentState.xLog), ty = tVal(y, currentState.yLog);
+    const cm = calModel();
+    if (cm) {
+      return {
+        px: cm.px1 + ((tx - cm.tx1) / (cm.tx2 - cm.tx1)) * (cm.px2 - cm.px1),
+        py: cm.py1 + ((ty - cm.ty1) / (cm.ty2 - cm.ty1)) * (cm.py2 - cm.py1),
+      };
+    }
+    const r = innerRect(), mm = tMinMax();
     return { px: r.x + ((tx - mm.xmin) / (mm.xmax - mm.xmin)) * r.w,
              py: r.y + r.h - ((ty - mm.ymin) / (mm.ymax - mm.ymin)) * r.h };
   };
   const pixelToData = (px, py) => {
+    const inv = (tv, log) => log ? Math.pow(10, tv) : tv;
+    const cm = calModel();
+    if (cm) {
+      const tx = cm.tx1 + ((px - cm.px1) / (cm.px2 - cm.px1)) * (cm.tx2 - cm.tx1);
+      const ty = cm.ty1 + ((py - cm.py1) / (cm.py2 - cm.py1)) * (cm.ty2 - cm.ty1);
+      return { x: inv(tx, currentState.xLog), y: inv(ty, currentState.yLog) };
+    }
     const r = innerRect(), mm = tMinMax();
     const tx = mm.xmin + ((px - r.x) / r.w) * (mm.xmax - mm.xmin);
     const ty = mm.ymin + ((r.y + r.h - py) / r.h) * (mm.ymax - mm.ymin);
-    const inv = (tv, log) => log ? Math.pow(10, tv) : tv;
     return { x: inv(tx, currentState.xLog), y: inv(ty, currentState.yLog) };
   };
   const fmtReal = v => {
@@ -219,6 +260,10 @@ export default function App() {
     const s = a >= 1e6 || a < 1e-4 ? Number(v).toPrecision(6) : Number(v).toLocaleString(undefined, { maximumFractionDigits: 6 });
     return s.replace(/\.?0+$/, "");
   };
+  const setCalEnabledForBg = (idx, enabled) => setCalEnabledByBg(prev => { const n=[...prev]; n[idx]=enabled; return n; });
+  const setCalClipForBg = (idx, clip) => setCalClipByBg(prev => { const n=[...prev]; n[idx]=clip; return n; });
+  const setCalPixelsForBg = (idx, updater) => setCalPixelsByBg(prev => { const n=[...prev]; n[idx]=typeof updater==="function" ? updater(n[idx]) : updater; return n; });
+  const setCalValuesForBg = (idx, updater) => setCalValuesByBg(prev => { const n=[...prev]; n[idx]=typeof updater==="function" ? updater(n[idx]) : updater; return n; });
 
   /* image base/anchor */
   const baseRect = idx => {
@@ -242,22 +287,214 @@ export default function App() {
     return { dx, dy, dw, dh, ax, ay, fx, fy, baseW: base.w, baseH: base.h };
   };
 
-  /* image load */
+  /** 캘리브로 찍은 이미지 위 점을 Axes 패널의 격자(축 한계) 좌표계에 맞게 배경 스케일·이동 + 캘리브 픽셀 동기화 */
+  const fitImageToAxesCalibration = bgIdx => {
+    const st = currentState;
+    if (!st) return;
+    const img = bgRefs.current[bgIdx];
+    if (!img || !bgList[bgIdx]) {
+      notify('이 슬롯에 이미지를 먼저 불러오세요', 'err');
+      return;
+    }
+    const cp = calPixelsByBg[bgIdx];
+    const cv = calValuesByBg[bgIdx];
+    const vx1 = Number(cv.x1), vx2 = Number(cv.x2), vy1 = Number(cv.y1), vy2 = Number(cv.y2);
+    if (!cp?.x1 || !cp?.x2 || !cp?.y1 || !cp?.y2 || ![vx1, vx2, vy1, vy2].every(Number.isFinite)) {
+      notify('캘리브 4점을 찍고 숫자 값을 모두 입력하세요', 'err');
+      return;
+    }
+    if ((st.xLog && (vx1 <= 0 || vx2 <= 0)) || (st.yLog && (vy1 <= 0 || vy2 <= 0))) {
+      notify('로그 축에는 양수 값만 사용할 수 있습니다', 'err');
+      return;
+    }
+    const { dx, dy, dw, dh } = drawRectAndAnchor(bgIdx);
+    if (Math.abs(dw) < EPS || Math.abs(dh) < EPS) {
+      notify('이미지 표시 크기가 너무 작습니다', 'err');
+      return;
+    }
+    const fu1 = (cp.x1.px - dx) / dw;
+    const fu2 = (cp.x2.px - dx) / dw;
+    const fv1 = (cp.y1.py - dy) / dh;
+    const fv2 = (cp.y2.py - dy) / dh;
+    if (Math.abs(fu2 - fu1) < 1e-5 || Math.abs(fv2 - fv1) < 1e-5) {
+      notify('X1·X2 또는 Y1·Y2가 이미지에서 너무 가깝습니다', 'err');
+      return;
+    }
+
+    const r = innerRect();
+    const mm = {
+      xmin: tVal(st.xMin, st.xLog),
+      xmax: tVal(st.xMax, st.xLog),
+      ymin: tVal(st.yMin, st.yLog),
+      ymax: tVal(st.yMax, st.yLog),
+    };
+    if (!(mm.xmax > mm.xmin && mm.ymax > mm.ymin)) {
+      notify('Axes 축 범위(X/Y Min·Max)를 확인하세요', 'err');
+      return;
+    }
+    const pxAt = tx => r.x + ((tx - mm.xmin) / (mm.xmax - mm.xmin)) * r.w;
+    const pyAt = ty => r.y + r.h - ((ty - mm.ymin) / (mm.ymax - mm.ymin)) * r.h;
+    const tx1 = tVal(vx1, st.xLog), tx2 = tVal(vx2, st.xLog);
+    const ty1 = tVal(vy1, st.yLog), ty2 = tVal(vy2, st.yLog);
+    const pxT1 = pxAt(tx1), pxT2 = pxAt(tx2);
+    const pyT1 = pyAt(ty1), pyT2 = pyAt(ty2);
+
+    const dwNew = (pxT2 - pxT1) / (fu2 - fu1);
+    const dxNew = pxT1 - fu1 * dwNew;
+    const dhNew = (pyT2 - pyT1) / (fv2 - fv1);
+    const dyNew = pyT1 - fv1 * dhNew;
+
+    if (!Number.isFinite(dwNew) || !Number.isFinite(dhNew) || dwNew <= 1 || dhNew <= 1) {
+      notify('맞춤 계산에 실패했습니다. 점 위치와 축 값이 서로 맞는지 확인하세요', 'err');
+      return;
+    }
+    if (dwNew < 0 || dhNew < 0) {
+      notify('X1이 X2보다 작은 데이터(왼쪽)·Y 방향이 화면과 일치하는지 확인하세요', 'err');
+      return;
+    }
+
+    const base = baseRect(bgIdx);
+    const sx = clampS(dwNew / base.w);
+    const sy = clampS(dhNew / base.h);
+    const dwAdj = base.w * sx;
+    const dhAdj = base.h * sy;
+    const dxAdj = pxT1 - fu1 * dwAdj;
+    const dyAdj = pyT1 - fv1 * dhAdj;
+
+    const CA = st.customAnchors[bgIdx];
+    let offX, offY;
+    if (anchorMode === 'custom') {
+      const dax = CA ? CA.ax : base.x;
+      const day = CA ? CA.ay : base.y + base.h;
+      const fx = CA ? CA.fx : 0;
+      const fy = CA ? CA.fy : 1;
+      offX = dxAdj - dax + fx * dwAdj;
+      offY = dyAdj - day + fy * dhAdj;
+    } else {
+      offX = dxAdj - base.x - base.w / 2 + 0.5 * dwAdj;
+      offY = dyAdj - base.y - base.h / 2 + 0.5 * dhAdj;
+    }
+
+    const remap = pt => {
+      if (!pt) return null;
+      const fu = (pt.px - dx) / dw;
+      const fv = (pt.py - dy) / dh;
+      return { px: dxAdj + fu * dwAdj, py: dyAdj + fv * dhAdj };
+    };
+
+    updateState(prev => {
+      const nxf = [...prev.bgXform];
+      const cur = nxf[bgIdx] || { sx: 1, sy: 1, offX: 0, offY: 0 };
+      nxf[bgIdx] = { ...cur, sx, sy, offX, offY };
+      return { ...prev, bgXform: nxf };
+    });
+    setCalPixelsForBg(bgIdx, {
+      x1: remap(cp.x1),
+      x2: remap(cp.x2),
+      y1: remap(cp.y1),
+      y2: remap(cp.y2),
+    });
+    setTick(t => t + 1);
+    notify('Axes 격자에 이미지·캘리브 점을 맞췄습니다');
+  };
+
+  /* image load — 파일·캡처·URL 등 data URL / blob URL 공통 */
+  const loadImageFromSrc = (idx, src) => {
+    const img = new Image(); img.crossOrigin = "anonymous";
+    img.onload = () => {
+      bgRefs.current[idx] = img; bgUrls.current[idx] = src;
+      setBgList(cur => { const n = [...cur]; n[idx] = { w: img.width, h: img.height }; return n; });
+    };
+    img.onerror = () => notify("Image load failed", "err");
+    img.src = src;
+  };
+
   const onFile = (file, idx) => {
     if (!file || !/^image\//.test(file.type)) { notify("Image files only", "err"); return; }
-    const img = new Image(); img.crossOrigin = "anonymous";
-    const finalize = src => {
-      img.onload = () => {
-        bgRefs.current[idx] = img; bgUrls.current[idx] = src;
-        setBgList(cur => { const n = [...cur]; n[idx] = { w: img.width, h: img.height }; return n; });
-      };
-      img.onerror = () => notify("Image load failed", "err");
-      img.src = src;
-    };
     const fr = new FileReader();
-    fr.onload = () => finalize(String(fr.result || ""));
-    fr.onerror = () => { try { finalize(URL.createObjectURL(file)); } catch { notify("Image load failed", "err"); } };
+    fr.onload = () => loadImageFromSrc(idx, String(fr.result || ""));
+    fr.onerror = () => { try { loadImageFromSrc(idx, URL.createObjectURL(file)); } catch { notify("Image load failed", "err"); } };
     fr.readAsDataURL(file);
+  };
+
+  /** 화면/창/탭 공유(getDisplayMedia)로 한 장 캡처 후 현재 이미지 슬롯에 넣기 */
+  const captureScreenToSlot = async idx => {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      notify("이 환경에서는 화면 캡처 API를 쓸 수 없습니다(HTTPS 또는 localhost 필요)", "err");
+      return;
+    }
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    } catch (e) {
+      const name = e && e.name;
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") notify("화면 공유가 취소되었습니다", "err");
+      else notify("화면 캡처를 시작할 수 없습니다", "err");
+      return;
+    }
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      stream.getTracks().forEach(t => t.stop());
+      notify("비디오 트랙이 없습니다", "err");
+      return;
+    }
+    const video = document.createElement("video");
+    video.playsInline = true;
+    video.muted = true;
+    video.srcObject = stream;
+    try {
+      await video.play();
+    } catch {
+      stream.getTracks().forEach(t => t.stop());
+      notify("영상 재생에 실패했습니다", "err");
+      return;
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    let w = video.videoWidth, h = video.videoHeight;
+    if (w < 2 || h < 2) {
+      stream.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+      notify("화면 크기를 읽을 수 없습니다. 다시 시도해 주세요", "err");
+      return;
+    }
+    const MAX = 4096;
+    if (w > MAX || h > MAX) {
+      const s = Math.min(MAX / w, MAX / h);
+      w = Math.max(2, Math.floor(w * s));
+      h = Math.max(2, Math.floor(h * s));
+    }
+    const cap = document.createElement("canvas");
+    cap.width = w; cap.height = h;
+    const ctx = cap.getContext("2d");
+    if (!ctx) {
+      stream.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+      notify("캔버스를 만들 수 없습니다", "err");
+      return;
+    }
+    try {
+      ctx.drawImage(video, 0, 0, w, h);
+    } catch {
+      stream.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+      notify("그리기에 실패했습니다(캔버스 한도 등)", "err");
+      return;
+    }
+    stream.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+    let dataUrl = "";
+    try {
+      dataUrl = cap.toDataURL("image/png");
+    } catch {
+      notify("이미지로 변환하지 못했습니다", "err");
+      return;
+    }
+    if (!dataUrl || dataUrl.length < 32) {
+      notify("캡처 데이터가 비었습니다", "err");
+      return;
+    }
+    loadImageFromSrc(idx, dataUrl);
+    notify(`화면 캡처 반영 (${w}×${h})`);
   };
 
   useEffect(() => {
@@ -307,7 +544,7 @@ export default function App() {
   /* keyboard */
   useEffect(() => {
     const onKey = e => {
-      if (e.key === "Escape") { setPickAnchor(false); setSelectedPoint(null); }
+      if (e.key === "Escape") { setPickAnchor(false); setSelectedPoint(null); setCalPick(null); setSelectedCalPoint(null); }
       const arrows = ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"];
       if (!arrows.includes(e.key)) return;
       e.preventDefault();
@@ -323,6 +560,16 @@ export default function App() {
         updateState(prev => ({ ...prev, series: prev.series.map((s, si) => si !== seriesIndex ? s : { ...s, points: s.points.map((p, pi) => pi === pointIndex ? nd : p) }) }));
         return;
       }
+      if (selectedCalPoint) {
+        const p = calPixels[selectedCalPoint];
+        if (!p) return;
+        const step = e.shiftKey ? 10 : 1;
+        let nx = p.px, ny = p.py;
+        if (e.key === "ArrowLeft") nx -= step; if (e.key === "ArrowRight") nx += step;
+        if (e.key === "ArrowUp") ny -= step;   if (e.key === "ArrowDown") ny += step;
+        setCalPixelsForBg(activeBg, prev => ({ ...prev, [selectedCalPoint]: { px: nx, py: ny } }));
+        return;
+      }
       if (bgEditMode) {
         const step = e.shiftKey ? 10 : 1;
         updateState(prev => {
@@ -334,9 +581,10 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedPoint, bgEditMode, activeBg, currentState]);
+  }, [selectedPoint, selectedCalPoint, bgEditMode, activeBg, currentState, calPixels]);
 
-  const cursorForHandle = (handle, bgEdit, picking) => {
+  const cursorForHandle = (handle, bgEdit, picking, calPicking) => {
+    if (calPicking) return "crosshair";
     if (picking) return "crosshair"; if (!bgEdit) return "crosshair";
     switch (handle) {
       case "left": case "right": return "ew-resize";
@@ -490,7 +738,24 @@ export default function App() {
     for (let i=0;i<MAX_BG;i++) {
       const img=bgRefs.current[i]; if(!img||!showBgs[i]||opacityBgs[i]<=0) continue;
       const {dx,dy,dw,dh,ax,ay}=drawRectAndAnchor(i);
-      ctx.globalAlpha=opacityBgs[i]; ctx.drawImage(img,dx,dy,dw,dh); ctx.globalAlpha=1;
+      const cOn = calEnabledByBg[i];
+      const cClip = calClipByBg[i];
+      const cPx = calPixelsByBg[i];
+      const hasCalRect = cOn && cPx?.x1 && cPx?.x2 && cPx?.y1 && cPx?.y2;
+      if (hasCalRect && cClip) {
+        const left = Math.min(cPx.x1.px, cPx.x2.px);
+        const right = Math.max(cPx.x1.px, cPx.x2.px);
+        const top = Math.min(cPx.y1.py, cPx.y2.py);
+        const bottom = Math.max(cPx.y1.py, cPx.y2.py);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, top, Math.max(1, right-left), Math.max(1, bottom-top));
+        ctx.clip();
+        ctx.globalAlpha=opacityBgs[i]; ctx.drawImage(img,dx,dy,dw,dh); ctx.globalAlpha=1;
+        ctx.restore();
+      } else {
+        ctx.globalAlpha=opacityBgs[i]; ctx.drawImage(img,dx,dy,dw,dh); ctx.globalAlpha=1;
+      }
       if (i===activeBg) lastRectRef.current={x:dx,y:dy,w:dw,h:dh};
       if (i===activeBg&&pickAnchor) {
         ctx.save(); ctx.strokeStyle="#F59E0B"; ctx.fillStyle="#F59E0B";
@@ -657,6 +922,40 @@ export default function App() {
       ctx.restore();
     }
 
+    /* calibration markers */
+    const drawCal = (pt, label, color) => {
+      if (!pt) return;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(pt.px - 8, pt.py); ctx.lineTo(pt.px + 8, pt.py); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pt.px, pt.py - 8); ctx.lineTo(pt.px, pt.py + 8); ctx.stroke();
+      ctx.beginPath(); ctx.arc(pt.px, pt.py, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.font = "bold 11px ui-sans-serif"; ctx.textAlign = "left";
+      ctx.fillText(label, pt.px + 10, pt.py - 8);
+      if (selectedCalPoint === label.toLowerCase()) {
+        ctx.beginPath(); ctx.arc(pt.px, pt.py, 8, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.restore();
+    };
+    if (calEnabled && calPixels.x1 && calPixels.x2 && calPixels.y1 && calPixels.y2) {
+      const left = Math.min(calPixels.x1.px, calPixels.x2.px);
+      const right = Math.max(calPixels.x1.px, calPixels.x2.px);
+      const top = Math.min(calPixels.y1.py, calPixels.y2.py);
+      const bottom = Math.max(calPixels.y1.py, calPixels.y2.py);
+      ctx.save();
+      ctx.strokeStyle = "#0EA5E9";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([7,4]);
+      ctx.strokeRect(left, top, right - left, bottom - top);
+      ctx.restore();
+    }
+    drawCal(calPixels.x1, "X1", "#2563EB");
+    drawCal(calPixels.x2, "X2", "#2563EB");
+    drawCal(calPixels.y1, "Y1", "#DC2626");
+    drawCal(calPixels.y2, "Y2", "#DC2626");
+
     /* legend */
     ctx.save();
     const rr2=innerRect(); ctx.font="600 16px ui-sans-serif, system-ui";
@@ -683,7 +982,8 @@ export default function App() {
     }
   }, [currentState,activeBg,showBgs,opacityBgs,keepAspect,anchorMode,pickAnchor,hoverHandle,
       showPoints,connectLines,lineAlpha,lineWidth,smoothLines,smoothAlpha,ptRadius,
-      guideXs,guideYs,showCrossFromX,showCrossFromY,magnifyOn,selectedPoint,tick,minBreakCurrents]);
+      guideXs,guideYs,showCrossFromX,showCrossFromY,magnifyOn,selectedPoint,tick,minBreakCurrents,
+      calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,calPick,selectedCalPoint]);
 
   /* I2t graph render */
   useEffect(() => {
@@ -797,6 +1097,24 @@ export default function App() {
   };
   const onMouseDown = e => {
     const {px,py}=canvasPoint(e); if(e.button===2){setPickAnchor(false);return;}
+    if (calPick && inPlot(px, py)) {
+      setCalPixelsForBg(activeBg, prev => ({ ...prev, [calPick]: { px, py } }));
+      setSelectedCalPoint(calPick);
+      setCalPick(null);
+      notify(`Calibration ${calPick.toUpperCase()} point set`);
+      return;
+    }
+    if (calEnabled) {
+      const keys = ["x1","x2","y1","y2"];
+      for (const k of keys) {
+        const p = calPixels[k];
+        if (p && Math.hypot(px - p.px, py - p.py) <= 10) {
+          setSelectedCalPoint(k as CalPickKey);
+          notify(`${k.toUpperCase()} selected (arrow keys move)`);
+          return;
+        }
+      }
+    }
     if (pickAnchor&&overImage(px,py)) {
       const xf=currentState.bgXform[activeBg];
       const lr=lastRectRef.current;
@@ -871,10 +1189,9 @@ export default function App() {
     }));
     notify(pts.length + ' points ' + (mode === 'replace' ? 'replaced' : 'added'));
     setPasteText('');
-    setPasteOpen(false);
   };
 
-  const copyPointsToClipboard = (seriesIdx) => {
+  const copyPointsToClipboard = (seriesIdx = activeSeries) => {
     const s = currentState.series[seriesIdx ?? activeSeries];
     if (!s || s.points.length === 0) { notify('No points to copy', 'err'); return; }
     const text = s.points.map(p => `${p.x}\t${p.y}`).join('\n');
@@ -901,6 +1218,7 @@ export default function App() {
     const payload = {
       company: saveFormCompany.trim(),
       name: saveFormName.trim(),
+      sourceSlot: slot,
       imageData: bgUrls.current[slot] ?? null,
       bgXform: currentState.bgXform[slot],
       customAnchor: currentState.customAnchors[slot] ?? null,
@@ -965,6 +1283,7 @@ export default function App() {
     cross:{fromX:showCrossFromX,fromY:showCrossFromY},
     i2t:{show:showI2tGraph,mode:lifetimeMode,cycles:lifetimeCycles,multipliers:currentMultipliers,ratios:lifetimeRatios},
     minBreakCurrents,
+    calibrationByBg:{enabled:calEnabledByBg,clip:calClipByBg,pixels:calPixelsByBg,values:calValuesByBg},
   });
   const applyPreset = p => {
     try {
@@ -1000,6 +1319,19 @@ export default function App() {
         setMinBreakCurrents(p.minBreakCurrents.slice(0,MAX_SERIES).map(v=>(v!=null&&isFinite(Number(v))&&Number(v)>0)?Number(v):null));
         setMinBreakInputs({});
       }
+      if (p.calibrationByBg) {
+        const en = Array(MAX_BG).fill(false).map((_,i)=>!!p.calibrationByBg?.enabled?.[i]);
+        const cp = Array(MAX_BG).fill(false).map((_,i)=>!!p.calibrationByBg?.clip?.[i]);
+        const px = Array(MAX_BG).fill(null).map((_,i)=>p.calibrationByBg?.pixels?.[i] ?? {x1:null,x2:null,y1:null,y2:null});
+        const vv = Array(MAX_BG).fill(null).map((_,i)=>p.calibrationByBg?.values?.[i] ?? {x1:"",x2:"",y1:"",y2:""});
+        setCalEnabledByBg(en); setCalClipByBg(cp); setCalPixelsByBg(px); setCalValuesByBg(vv);
+      } else if (p.calibration) {
+        const en = Array(MAX_BG).fill(false); en[0] = !!p.calibration.enabled;
+        const cp = Array(MAX_BG).fill(false);
+        const px = Array(MAX_BG).fill(null).map((_,i)=>i===0?(p.calibration.pixels ?? {x1:null,x2:null,y1:null,y2:null}):{x1:null,x2:null,y1:null,y2:null});
+        const vv = Array(MAX_BG).fill(null).map((_,i)=>i===0?(p.calibration.values ?? {x1:"",x2:"",y1:"",y2:""}):{x1:"",x2:"",y1:"",y2:""});
+        setCalEnabledByBg(en); setCalClipByBg(cp); setCalPixelsByBg(px); setCalValuesByBg(vv);
+      }
       updateState(()=>next,true); notify("Preset loaded");
     } catch { notify("Invalid preset","err"); }
   };
@@ -1014,7 +1346,7 @@ export default function App() {
     if (h.startsWith("#s=")) { try{applyPreset(JSON.parse(decodeURIComponent(escape(atob(h.slice(3))))));return;}catch{} }
     try{const raw=localStorage.getItem("digitizer:auto");if(raw)applyPreset(JSON.parse(raw));}catch{}
   }, []);
-  useEffect(() => { try{localStorage.setItem("digitizer:auto",JSON.stringify(serialize()));}catch{} }, [currentState,guideXs,guideYs,showCrossFromX,showCrossFromY,keepAspect,showBgs,opacityBgs,activeBg]);
+  useEffect(() => { try{localStorage.setItem("digitizer:auto",JSON.stringify(serialize()));}catch{} }, [currentState,guideXs,guideYs,showCrossFromX,showCrossFromY,keepAspect,showBgs,opacityBgs,activeBg,calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg]);
 
   if (!currentState) return <div className="flex h-screen items-center justify-center">Loading...</div>;
 
@@ -1214,9 +1546,17 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                    <button onClick={()=>fileRefs.current[activeBg]?.click()} className="w-full rounded bg-gray-800 py-1.5 text-xs font-semibold text-white hover:bg-gray-700">
-                      Load Image {BG_LABELS[activeBg]}
-                    </button>
+                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                      <button type="button" onClick={()=>fileRefs.current[activeBg]?.click()} className="rounded bg-gray-800 py-1.5 text-xs font-semibold text-white hover:bg-gray-700">
+                        파일에서 불러오기 ({BG_LABELS[activeBg]})
+                      </button>
+                      <button type="button" onClick={()=>captureScreenToSlot(activeBg)} className="rounded border border-emerald-700 bg-emerald-600 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                        화면·창 캡처
+                      </button>
+                    </div>
+                    <p className="text-[9px] leading-snug text-gray-500">
+                      캡처: 브라우저가 화면/창/탭 선택 창을 띄운 뒤, <strong>그 순간</strong> 한 장을 PNG로 슬롯에 넣습니다. 다른 창의 그래프를 골라 캡처하면 됩니다(HTTPS 또는 localhost).
+                    </p>
                     {BG_LABELS.map((_,i)=>(
                       <input key={i} ref={el=>{fileRefs.current[i]=el;}} type="file" accept="image/*" hidden onChange={e=>{const f=e.target.files?.[0];if(f)onFile(f,i);e.target.value="";}}/>
                     ))}
@@ -1227,6 +1567,59 @@ export default function App() {
                       <div className="col-span-2 grid grid-cols-2 gap-2">
                         <button onClick={()=>setPickAnchor(v=>!v)} className={`rounded bg-gray-200 px-2 py-1 text-xs ${pickAnchor?"bg-orange-100 text-orange-800":""}`}>{pickAnchor?"Click pivot point...":"Set Pivot"}</button>
                         <button onClick={()=>updateState(prev=>{const n=[...prev.customAnchors];n[activeBg]=null;return{...prev,customAnchors:n};})} className="rounded bg-gray-200 px-2 py-1 text-xs">Clear</button>
+                      </div>
+                    </div>
+                    <div className="rounded border border-blue-200 bg-blue-50 p-2">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-blue-900">Calibration (Image {BG_LABELS[activeBg]})</span>
+                        <label className="flex items-center gap-1 text-[11px]">
+                          <input type="checkbox" className="h-3 w-3" checked={calEnabled} onChange={e=>setCalEnabledForBg(activeBg, e.target.checked)} />
+                          Enable
+                        </label>
+                      </div>
+                      <label className="mb-1 flex items-center gap-2 text-[10px] text-blue-800">
+                        <input type="checkbox" className="h-3 w-3" checked={calClip} onChange={e=>setCalClipForBg(activeBg, e.target.checked)} />
+                        Clip outside calibration rectangle (이미지가 작아보이면 OFF)
+                      </label>
+                      <p className="mb-1 text-[10px] text-blue-700">X/Y 점 선택 후 값 입력. 점 클릭 재선택 가능, 화살표로 미세 이동.</p>
+                      <div className="grid grid-cols-[auto,1fr,auto] gap-1">
+                        {["x1","x2","y1","y2"].map((k) => (
+                          <Fragment key={k}>
+                            <button
+                              onClick={()=>{ setCalPick(k as CalPickKey); setSelectedCalPoint(k as CalPickKey); notify(`Click ${k.toUpperCase()} point on graph`); }}
+                              className={`rounded px-1.5 py-1 text-[10px] font-semibold ${calPick===k||selectedCalPoint===k?"bg-amber-200 text-amber-900":"bg-white border border-blue-200 text-blue-800"}`}>
+                              Pick {k.toUpperCase()}
+                            </button>
+                            <input
+                              type="number"
+                              className="rounded border px-1.5 py-1 text-[10px]"
+                              placeholder={`${k.toUpperCase()} value`}
+                              value={calValues[k]}
+                              onChange={e=>setCalValuesForBg(activeBg, v=>({ ...v, [k]: e.target.value }))}
+                            />
+                            <span className={`self-center text-[10px] ${calPixels[k] ? "text-green-700" : "text-gray-400"}`}>
+                              {calPixels[k] ? "●" : "○"}
+                            </span>
+                          </Fragment>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className="w-full rounded bg-blue-600 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700"
+                        onClick={() => fitImageToAxesCalibration(activeBg)}>
+                        축(Axes) 격자에 이미지 맞춤 (자동)
+                      </button>
+                      <p className="text-[9px] leading-snug text-blue-800/90">
+                        4점·값 기준으로 배경을 스케일·이동해, 해당 데이터 좌표가 Axes에 설정한 Min/Max 격자 위에 오도록 합니다. 캘리브 점은 같은 그래프 위치를 유지하도록 같이 이동합니다.
+                      </p>
+                      <div className="mt-1 flex gap-1">
+                        <button
+                          className="rounded bg-gray-200 px-2 py-1 text-[10px] hover:bg-gray-300"
+                          onClick={()=>{setCalPick(null); setSelectedCalPoint(null); setCalPixelsForBg(activeBg,{x1:null,x2:null,y1:null,y2:null}); setCalValuesForBg(activeBg,{x1:"",x2:"",y1:"",y2:""}); setCalEnabledForBg(activeBg,false); setCalClipForBg(activeBg,false);}}>
+                          Clear Calibration
+                        </button>
+                        {selectedCalPoint && <span className="self-center text-[10px] text-blue-700">Selected: {selectedCalPoint.toUpperCase()}</span>}
+                        {calPick && <span className="self-center text-[10px] text-amber-700">Picking {calPick.toUpperCase()}...</span>}
                       </div>
                     </div>
                   </div>
@@ -1334,7 +1727,7 @@ export default function App() {
             </div>
             <div className="overflow-hidden rounded-lg border border-gray-300">
               <canvas ref={canvasRef} width={size.w} height={size.h} className="block touch-none select-none"
-                style={{cursor:cursorForHandle(hoverHandle,bgEditMode,pickAnchor)}}
+                style={{cursor:cursorForHandle(hoverHandle,bgEditMode,pickAnchor,calPick)}}
                 onMouseMove={onMouseMove} onMouseDown={onMouseDown} onMouseUp={onMouseUp} onMouseLeave={onMouseLeave}
                 onDragOver={e=>e.preventDefault()}
                 onDrop={e=>{e.preventDefault();const f=e.dataTransfer?.files?.[0];if(f&&/^image\//.test(f.type))onFile(f,activeBg);}}
@@ -1631,9 +2024,9 @@ export default function App() {
                   <p className="font-semibold text-gray-700 text-[11px] uppercase tracking-wide">Save Product</p>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Company" value={saveFormCompany} onChange={e=>setSaveFormCompany(e.target.value)}/>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Product name" value={saveFormName} onChange={e=>setSaveFormName(e.target.value)}/>
-                  <p className="text-[10px] text-gray-400">Saves image + curve as a set</p>
+                  <p className="text-[10px] text-gray-400">이미지 슬롯(A–E)별로 곡선·배경이 함께 저장됩니다. 같은 회사·제품명은 슬롯마다 따로 보관됩니다.</p>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {[0,1].map(slot=>(
+                    {Array.from({ length: MAX_SERIES }, (_, slot) => (
                       <button key={slot} onClick={()=>saveToLibrary(slot)}
                         className="rounded py-2 text-[11px] font-bold transition-opacity hover:opacity-80"
                         style={{background:SERIES_COLORS[slot]+"22",color:SERIES_COLORS[slot],border:`1.5px solid ${SERIES_COLORS[slot]}88`}}>
@@ -1667,17 +2060,21 @@ export default function App() {
                               <div className="w-3 h-3 rounded-full flex-shrink-0" style={{background:p.seriesColor??'#888'}}/>
                               <div className="flex-1 min-w-0">
                                 <div className="font-semibold truncate">{p.name}</div>
-                                <div className="text-[10px] text-gray-400 flex gap-2">
+                                <div className="text-[10px] text-gray-400 flex flex-wrap gap-x-2 gap-y-0.5">
                                   <span>{new Date(p.savedAt).toLocaleDateString('ko-KR')}</span>
                                   <span>{p.points?.length??0}pts</span>
+                                  {p.sourceSlot!=null&&<span>슬롯 {SERIES_NAMES[p.sourceSlot]??p.sourceSlot}</span>}
                                   {p.minBreakCurrent&&<span>min-I:{p.minBreakCurrent}</span>}
                                   {p.imageData!==undefined?<span>&#128247;</span>:''}
                                 </div>
                               </div>
-                              <button onClick={()=>loadFromLibrary(p.id,0)} title="Load to slot A"
-                                className="rounded bg-blue-100 text-blue-700 px-2 py-1 text-[10px] font-bold hover:bg-blue-200 flex-shrink-0">&#8594; A</button>
-                              <button onClick={()=>loadFromLibrary(p.id,1)} title="Load to slot B"
-                                className="rounded bg-emerald-100 text-emerald-700 px-2 py-1 text-[10px] font-bold hover:bg-emerald-200 flex-shrink-0">&#8594; B</button>
+                              <div className="flex flex-wrap gap-1 justify-end max-w-[200px]">
+                              {Array.from({ length: MAX_SERIES }, (_, slot) => (
+                              <button key={slot} onClick={()=>loadFromLibrary(p.id,slot)} title={'Load to slot '+SERIES_NAMES[slot]}
+                                className="rounded px-1.5 py-0.5 text-[10px] font-bold hover:opacity-90 flex-shrink-0 border"
+                                style={{background:SERIES_COLORS[slot]+"22",color:SERIES_COLORS[slot],borderColor:SERIES_COLORS[slot]+"88"}}>&#8594;{SERIES_NAMES[slot]}</button>
+                              ))}
+                              </div>
                               <button onClick={()=>deleteFromLibrary(p.id)} title="Delete"
                                 className="rounded bg-red-100 text-red-600 px-2 py-1 text-[10px] hover:bg-red-200 flex-shrink-0">Del</button>
                             </div>

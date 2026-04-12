@@ -38,6 +38,7 @@ export default async function handler(req, res) {
         bgXform:          r.bg_xform,
         customAnchor:     r.custom_anchor,
         minBreakCurrent:  r.min_break_current,
+        sourceSlot:       r.source_slot != null && r.source_slot !== '' ? Number(r.source_slot) : undefined,
       });
     }
 
