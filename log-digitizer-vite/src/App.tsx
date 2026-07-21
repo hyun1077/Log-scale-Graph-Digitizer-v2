@@ -1410,6 +1410,17 @@ export default function App() {
   };
 
   const loadFromLibrary = async (itemId, targetSlot) => {
+    const existingSeries = currentState.series[targetSlot];
+    if (existingSeries?.points?.length > 0) {
+      const slotLabel = BG_LABELS[targetSlot] ?? `S${targetSlot + 1}`;
+      const confirmed = window.confirm(
+        `${slotLabel} 라인에 기존 데이터 ${existingSeries.points.length}개가 있습니다.\n\n기존 데이터를 모두 삭제하고 선택한 제품으로 덮어쓰시겠습니까?`
+      );
+      if (!confirmed) {
+        notify(`${slotLabel} 불러오기를 취소했습니다`, "err");
+        return;
+      }
+    }
     try {
       const res = await fetch('/api/products/' + itemId);
       if (!res.ok) { notify('Load failed', 'err'); return; }
