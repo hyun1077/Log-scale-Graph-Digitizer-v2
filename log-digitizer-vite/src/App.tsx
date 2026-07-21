@@ -62,7 +62,7 @@ export default function App() {
 
   /* I2t graph */
   const i2tCanvasRef = useRef(null);
-  const [showI2tGraph, setShowI2tGraph] = useState(true);
+  const [showI2tGraph, setShowI2tGraph] = useState(false);
   const [lifetimeMode, setLifetimeMode] = useState("I_mode");
   const [lifetimeCycles, setLifetimeCycles] = useState([1,10,100,1000,10000,100000,1000000]);
   const [currentMultipliers, setCurrentMultipliers] = useState([3.15,2.80,2.55,2.06,1.70,1.00,0.70]);
@@ -1537,7 +1537,7 @@ export default function App() {
       setOpacityBgs(Array(MAX_BG).fill(null).map((_,i)=>rawOpac?.[i]??BG_DEFAULT_OPACITY[i]));
       setActiveBg(p.bg?.activeBg??0);
       if (p.i2t) {
-        setShowI2tGraph(!!p.i2t.show);
+        setShowI2tGraph(false);
         if (p.i2t.mode==="I_mode"||p.i2t.mode==="I2t_mode") setLifetimeMode(p.i2t.mode);
         if (Array.isArray(p.i2t.cycles)) setLifetimeCycles(p.i2t.cycles.map(Number).filter(v=>isFinite(v)&&v>0));
         if (Array.isArray(p.i2t.multipliers)) {
