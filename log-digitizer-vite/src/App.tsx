@@ -460,6 +460,9 @@ export default function App() {
     img.onload = () => {
       bgRefs.current[idx] = img; bgUrls.current[idx] = src;
       setBgList(cur => { const n = [...cur]; n[idx] = { w: img.width, h: img.height }; return n; });
+      setShowBgs(cur => { const n = [...cur]; n[idx] = true; return n; });
+      setOpacityBgs(cur => { const n = [...cur]; if (!(n[idx] > 0)) n[idx] = BG_DEFAULT_OPACITY[idx] ?? 1; return n; });
+      setTick(t => t + 1);
     };
     img.onerror = () => notify("Image load failed", "err");
     img.src = src;
@@ -1044,7 +1047,7 @@ export default function App() {
       ctx.beginPath(); ctx.moveTo(size.w-sz-16+sz/2,16); ctx.lineTo(size.w-sz-16+sz/2,16+sz);
       ctx.moveTo(size.w-sz-16,16+sz/2); ctx.lineTo(size.w-16,16+sz/2); ctx.stroke(); ctx.restore();
     }
-  }, [currentState,activeBg,showBgs,opacityBgs,keepAspect,anchorMode,pickAnchor,hoverHandle,
+  }, [currentState,activeBg,bgList,showBgs,opacityBgs,keepAspect,anchorMode,pickAnchor,hoverHandle,
       showPoints,connectLines,lineAlpha,lineWidth,smoothLines,smoothAlpha,ptRadius,
       guideXs,guideYs,showCrossFromX,showCrossFromY,magnifyOn,selectedPoint,tick,minBreakCurrents,
       calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,calPick,selectedCalPoint,showIntersectionMarkers]);
