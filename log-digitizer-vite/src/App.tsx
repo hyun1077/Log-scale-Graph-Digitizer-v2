@@ -1687,7 +1687,7 @@ export default function App() {
                 {bgEditMode&&(
                   <div className="space-y-2 p-2 pt-0 text-xs">
                     <div className="flex border-b border-gray-200 overflow-x-auto">
-                      {BG_LABELS.slice(0, Math.min(MAX_BG, Math.max(6, currentState.series.length + 1))).map((label,i)=>(
+                      {BG_LABELS.slice(0, Math.min(MAX_BG, currentState.series.length)).map((label,i)=>(
                         <button key={i} onClick={()=>selectSlot(i)} className={`-mb-px flex-shrink-0 border-b-2 px-2 py-1 text-xs font-semibold ${activeBg===i?"border-blue-500 text-blue-600":"border-transparent text-gray-500 hover:border-gray-300"}`}>
                           {label}{bgList[i]?" *":""}
                         </button>
@@ -1840,7 +1840,10 @@ export default function App() {
                         const idx=currentState.series.length;
                         updateState(p=>({...p,series:[...p.series,{name:SERIES_NAMES[idx]??"S"+(idx+1),color:seriesColor(idx),points:[],visible:true,crossLines:true}]}));
                         setMinBreakCurrents(prev=>[...prev,null]);
-                        setActiveSeries(idx);
+                        setBgList(prev=>{const n=[...prev];n[idx]=n[idx]??null;return n;});
+                        setShowBgs(prev=>{const n=[...prev];n[idx]=true;return n;});
+                        setOpacityBgs(prev=>{const n=[...prev];n[idx]=n[idx]??BG_DEFAULT_OPACITY[idx];return n;});
+                        selectSlot(idx);
                       }}>+ Add Series ({currentState.series.length}/{MAX_SERIES})</button>
                   )}
 
