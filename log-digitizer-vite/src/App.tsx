@@ -8,14 +8,15 @@ import { type Sample } from "./lib/i2t";
  */
 
 const MAX_BG = 5;
-const MAX_SERIES = 5;
+const MAX_SERIES = 20;
 const SERIES_COLORS = ["#2563EB", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"];
 const SERIES_NAMES  = ["A", "B", "C", "D", "E"];
 const BG_LABELS     = ["A", "B", "C", "D", "E"];
 const BG_DEFAULT_OPACITY = [1, 0.7, 0.6, 0.5, 0.4];
+const seriesColor = (i: number) => SERIES_COLORS[i] ?? `hsl(${(i * 67) % 360} 70% 45%)`;
 
 type Pt = { x: number; y: number };
-type Series = { name: string; color: string; points: Pt[] };
+type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean };
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
@@ -47,6 +48,7 @@ export default function App() {
   const canvasRef  = useRef(null);
   const fileRefs   = useRef(Array(MAX_BG).fill(null));
   const presetFileRef = useRef(null);
+  const productFileRef = useRef(null);
 
   const bgRefs = useRef(Array(MAX_BG).fill(null));
   const bgUrls = useRef(Array(MAX_BG).fill(null));
@@ -99,6 +101,7 @@ export default function App() {
 
   const [activeSeries, setActiveSeries] = useState(0);
   const [selectedPoint, setSelectedPoint] = useState(null);
+  const selectSlot = (i: number) => { setActiveSeries(i); if (i < MAX_BG) setActiveBg(i); setSelectedPoint(null); };
 
   const [connectLines, setConnectLines] = useState(true);
   const [lineWidth, setLineWidth] = useState(1.6);
@@ -125,6 +128,9 @@ export default function App() {
   const [saveFormCompany, setSaveFormCompany] = useState('');
   const [saveFormName, setSaveFormName] = useState('');
   const [libFilter, setLibFilter] = useState('');
+  const [duplicateBaseCurrent, setDuplicateBaseCurrent] = useState("1000");
+  const [duplicateTargetCurrent, setDuplicateTargetCurrent] = useState("1100");
+  const [duplicateName, setDuplicateName] = useState("1100A");
 
   const [magnifyOn, setMagnifyOn] = useState(true);
   const [magnifyFactor] = useState(3);
@@ -189,8 +195,8 @@ export default function App() {
       xMin: 10, xMax: 1000000, yMin: 0.0001, yMax: 1000000,
       xLog: true, yLog: true,
       series: [
-        { name: "A", color: SERIES_COLORS[0], points: [] },
-        { name: "B", color: SERIES_COLORS[1], points: [] },
+        { name: "A", color: SERIES_COLORS[0], points: [], visible: true, crossLines: true },
+        { name: "B", color: SERIES_COLORS[1], points: [], visible: true, crossLines: true },
       ],
       bgXform:       Array(MAX_BG).fill(null).map(() => ({ sx: 1, sy: 1, offX: 0, offY: 0 })),
       customAnchors: Array(MAX_BG).fill(null),
@@ -662,14 +668,14 @@ export default function App() {
     if (!isFinite(mm.xmin)||!isFinite(mm.xmax)||!isFinite(mm.ymin)||!isFinite(mm.ymax)||mm.xmax<=mm.xmin||mm.ymax<=mm.ymin) {
       ctx.save(); ctx.fillStyle="#9CA3AF"; ctx.font="12px ui-sans-serif"; ctx.fillText("Invalid axis range",r.x+r.w/2,r.y+r.h/2); ctx.restore(); return;
     }
-    ctx.save(); ctx.strokeStyle="#E5E7EB"; ctx.fillStyle="#6B7280"; ctx.lineWidth=1; ctx.font="12px ui-sans-serif";
+    ctx.save(); ctx.strokeStyle="#CBD5E1"; ctx.fillStyle="#4B5563"; ctx.lineWidth=1.15; ctx.font="12px ui-sans-serif";
     if (currentState.xLog) {
       const n0=Math.floor(mm.xmin),n1=Math.ceil(mm.xmax);
       for (let n=n0;n<=n1;n++) {
         const px=dataToPixel(Math.pow(10,n),1).px;
         ctx.beginPath(); ctx.moveTo(px,r.y); ctx.lineTo(px,r.y+r.h); ctx.stroke();
         ctx.textAlign="center"; ctx.fillText(pow10Label(n),px,r.y+r.h+18);
-        for (let m=2;m<10;m++) { const v=Math.pow(10,n)*m,lv=Math.log10(v); if(lv>mm.xmax)break; if(lv<mm.xmin)continue; const xm=dataToPixel(v,1).px; ctx.save(); ctx.strokeStyle="#F3F4F6"; ctx.beginPath(); ctx.moveTo(xm,r.y); ctx.lineTo(xm,r.y+r.h); ctx.stroke(); ctx.restore(); }
+        for (let m=2;m<10;m++) { const v=Math.pow(10,n)*m,lv=Math.log10(v); if(lv>mm.xmax)break; if(lv<mm.xmin)continue; const xm=dataToPixel(v,1).px; ctx.save(); ctx.strokeStyle="#E2E8F0"; ctx.beginPath(); ctx.moveTo(xm,r.y); ctx.lineTo(xm,r.y+r.h); ctx.stroke(); ctx.restore(); }
       }
     } else {
       for (let i=0;i<=10;i++) { const t=i/10,px=r.x+t*r.w; ctx.beginPath(); ctx.moveTo(px,r.y); ctx.lineTo(px,r.y+r.h); ctx.stroke(); ctx.textAlign="center"; ctx.fillText(numFmt(currentState.xMin+t*(currentState.xMax-currentState.xMin),(currentState.xMax-currentState.xMin)/10),px,r.y+r.h+18); }
@@ -680,7 +686,7 @@ export default function App() {
         const py=dataToPixel(1,Math.pow(10,n)).py;
         ctx.beginPath(); ctx.moveTo(r.x,py); ctx.lineTo(r.x+r.w,py); ctx.stroke();
         ctx.textAlign="right"; ctx.fillText(pow10Label(n),r.x-6,py+4);
-        for (let m=2;m<10;m++) { const v=Math.pow(10,n)*m,lv=Math.log10(v); if(lv>mm.ymax)break; if(lv<mm.ymin)continue; const ym=dataToPixel(1,v).py; ctx.save(); ctx.strokeStyle="#F3F4F6"; ctx.beginPath(); ctx.moveTo(r.x,ym); ctx.lineTo(r.x+r.w,ym); ctx.stroke(); ctx.restore(); }
+        for (let m=2;m<10;m++) { const v=Math.pow(10,n)*m,lv=Math.log10(v); if(lv>mm.ymax)break; if(lv<mm.ymin)continue; const ym=dataToPixel(1,v).py; ctx.save(); ctx.strokeStyle="#E2E8F0"; ctx.beginPath(); ctx.moveTo(r.x,ym); ctx.lineTo(r.x+r.w,ym); ctx.stroke(); ctx.restore(); }
       }
     } else {
       for (let i=0;i<=10;i++) { const t=i/10,py=r.y+(1-t)*r.h,val=currentState.yMin+t*(currentState.yMax-currentState.yMin); ctx.beginPath(); ctx.moveTo(r.x,py); ctx.lineTo(r.x+r.w,py); ctx.stroke(); ctx.textAlign="right"; ctx.fillText(numFmt(val,(currentState.yMax-currentState.yMin)/10),r.x-6,py+4); }
@@ -753,6 +759,7 @@ export default function App() {
     const invX=v=>currentState.xLog?Math.pow(10,v):v, invY=v=>currentState.yLog?Math.pow(10,v):v;
     for (let si=0;si<series.length;si++) {
       for (let sj=si+1;sj<series.length;sj++) {
+        if (series[si].visible === false || series[sj].visible === false || series[si].crossLines === false || series[sj].crossLines === false) continue;
         const p1s=series[si].points, p2s=series[sj].points;
         if (p1s.length<2||p2s.length<2) continue;
         const t1=p1s.map(p=>({x:txFn(p.x),y:tyFn(p.y)})), t2=p2s.map(p=>({x:txFn(p.x),y:tyFn(p.y)}));
@@ -835,9 +842,10 @@ export default function App() {
         const gp=dataToPixel(gx,1); ctx.strokeStyle="#EF4444";
         ctx.beginPath(); ctx.moveTo(gp.px,rr.y); ctx.lineTo(gp.px,rr.y+rr.h); ctx.stroke();
         currentState.series.forEach(s => {
+          if (s.visible === false) return;
           const y=yAtX(s.points,gx); if(y==null) return;
           const P=dataToPixel(gx,y);
-          if (showCrossFromX) { ctx.strokeStyle="rgba(239,68,68,0.5)"; ctx.beginPath(); ctx.moveTo(rr.x,P.py); ctx.lineTo(rr.x+rr.w,P.py); ctx.stroke(); }
+          if (showCrossFromX && s.crossLines !== false) { ctx.strokeStyle="rgba(239,68,68,0.5)"; ctx.beginPath(); ctx.moveTo(rr.x,P.py); ctx.lineTo(rr.x+rr.w,P.py); ctx.stroke(); }
           ctx.fillStyle="#EF4444"; ctx.beginPath(); ctx.arc(P.px,P.py,4,0,Math.PI*2); ctx.fill();
         });
       }
@@ -851,9 +859,10 @@ export default function App() {
         const gp=dataToPixel(1,gy); ctx.strokeStyle="#3B82F6";
         ctx.beginPath(); ctx.moveTo(rr.x,gp.py); ctx.lineTo(rr.x+rr.w,gp.py); ctx.stroke();
         currentState.series.forEach(s => {
+          if (s.visible === false) return;
           const x=xAtY(s.points,gy); if(x==null) return;
           const P=dataToPixel(x,gy);
-          if (showCrossFromY) { ctx.strokeStyle="rgba(59,130,246,0.5)"; ctx.beginPath(); ctx.moveTo(P.px,rr.y); ctx.lineTo(P.px,rr.y+rr.h); ctx.stroke(); }
+          if (showCrossFromY && s.crossLines !== false) { ctx.strokeStyle="rgba(59,130,246,0.5)"; ctx.beginPath(); ctx.moveTo(P.px,rr.y); ctx.lineTo(P.px,rr.y+rr.h); ctx.stroke(); }
           ctx.fillStyle="#3B82F6"; ctx.beginPath(); ctx.arc(P.px,P.py,4,0,Math.PI*2); ctx.fill();
         });
       }
@@ -866,6 +875,7 @@ export default function App() {
       ctx.lineJoin="round"; ctx.lineCap="round"; ctx.globalAlpha=lineAlpha; ctx.lineWidth=lineWidth;
 
       currentState.series.forEach((s, si) => {
+        if (s.visible === false) return;
         if (s.points.length<2) return;
         const pxPts = s.points.map(p=>dataToPixel(p.x,p.y));
         ctx.strokeStyle = s.color;
@@ -925,6 +935,7 @@ export default function App() {
     /* points */
     if (showPoints) {
       currentState.series.forEach((s,si) => {
+        if (s.visible === false) return;
         ctx.fillStyle=s.color; ctx.strokeStyle="#fff";
         s.points.forEach((p,pi) => {
           const P=dataToPixel(p.x,p.y);
@@ -1015,6 +1026,7 @@ export default function App() {
     const rr2=innerRect(); ctx.font="600 16px ui-sans-serif, system-ui";
     let lx=rr2.x+10,ly=rr2.y+20;
     currentState.series.forEach((s,i) => {
+      if (s.visible === false) return;
       ctx.fillStyle=s.color; ctx.fillRect(lx,ly-10,12,12);
       ctx.fillStyle="#0f172a"; ctx.textAlign="left"; ctx.textBaseline="alphabetic";
       ctx.fillText(s.name+" ("+s.points.length+")"+(i===activeSeries?"  <":""), lx+22, ly+2);
@@ -1257,6 +1269,28 @@ export default function App() {
     });
   };
 
+  const duplicateShiftedSeries = () => {
+    const base = Number(duplicateBaseCurrent.replace(/,/g, ""));
+    const target = Number(duplicateTargetCurrent.replace(/,/g, ""));
+    const source = currentState.series[activeSeries];
+    if (!source || source.points.length === 0) { notify("복제할 제품 곡선이 없습니다", "err"); return; }
+    if (!(base > 0) || !(target > 0)) { notify("기준/목표 전류를 확인하세요", "err"); return; }
+    if (currentState.series.length >= MAX_SERIES) { notify(`최대 ${MAX_SERIES}개 곡선까지 가능합니다`, "err"); return; }
+    const idx = currentState.series.length;
+    const ratio = target / base;
+    const shifted = {
+      name: duplicateName.trim() || `${target}A`,
+      color: seriesColor(idx),
+      points: source.points.map(p => ({ ...p, x: p.x * ratio })),
+      visible: true,
+      crossLines: true,
+    };
+    updateState(prev => ({ ...prev, series: [...prev.series, shifted] }));
+    setMinBreakCurrents(prev => [...prev, (minBreakCurrents[activeSeries] ?? null) != null ? Number(minBreakCurrents[activeSeries]) * ratio : null]);
+    selectSlot(idx);
+    notify(`${source.name} → ${shifted.name} 복제 완료`);
+  };
+
   /* product library API */
   const fetchLibrary = async () => {
     try {
@@ -1293,7 +1327,7 @@ export default function App() {
       const res = await fetch('/api/products/' + itemId);
       if (!res.ok) { notify('Load failed', 'err'); return; }
       const product = await res.json();
-      if (product.imageData) {
+      if (product.imageData && targetSlot < MAX_BG) {
         const img = new Image(); img.crossOrigin = "anonymous";
         img.onload = () => {
           bgRefs.current[targetSlot] = img;
@@ -1306,15 +1340,16 @@ export default function App() {
       updateState(prev => {
         const newBgXform = [...prev.bgXform];
         const newAnchors = [...prev.customAnchors];
-        if (product.bgXform) newBgXform[targetSlot] = product.bgXform;
-        newAnchors[targetSlot] = product.customAnchor ?? null;
+        if (targetSlot < MAX_BG && product.bgXform) newBgXform[targetSlot] = product.bgXform;
+        if (targetSlot < MAX_BG) newAnchors[targetSlot] = product.customAnchor ?? null;
         const newSeries = [...prev.series];
-        while (newSeries.length <= targetSlot) newSeries.push({ name: SERIES_NAMES[newSeries.length] ?? 'S', color: SERIES_COLORS[newSeries.length] ?? '#64748B', points: [] });
-        newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? SERIES_COLORS[targetSlot], points: product.points ?? [] };
+        while (newSeries.length <= targetSlot) newSeries.push({ name: SERIES_NAMES[newSeries.length] ?? `S${newSeries.length+1}`, color: seriesColor(newSeries.length), points: [], visible: true, crossLines: true });
+        newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? seriesColor(targetSlot), points: product.points ?? [], visible: true, crossLines: true };
         return { ...prev, bgXform: newBgXform, customAnchors: newAnchors, series: newSeries };
       });
       setMinBreakCurrents(prev => { const n = [...prev]; while (n.length <= targetSlot) n.push(null); n[targetSlot] = product.minBreakCurrent ?? null; return n; });
       if (product.minBreakCurrent != null) setMinBreakInputs(prev => ({ ...prev, [targetSlot]: String(product.minBreakCurrent) }));
+      selectSlot(targetSlot);
       notify('Loaded to slot ' + SERIES_NAMES[targetSlot]);
       setShowLibrary(false);
     } catch { notify('Server error', 'err'); }
@@ -1325,6 +1360,34 @@ export default function App() {
       await fetch('/api/products/' + itemId, { method: 'DELETE' });
       fetchLibrary();
     } catch { notify('Delete failed', 'err'); }
+  };
+
+  const downloadProduct = async (itemId) => {
+    try {
+      const res = await fetch('/api/products/' + itemId);
+      if (!res.ok) throw new Error();
+      const product = await res.json();
+      const url = URL.createObjectURL(new Blob([JSON.stringify(product, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a'); a.href = url;
+      a.download = `${product.company || 'product'}_${product.name || itemId}.json`.replace(/[^a-zA-Z0-9가-힣._-]/g, '_');
+      a.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch { notify('제품 다운로드 실패', 'err'); }
+  };
+
+  const uploadProductFile = (file) => {
+    if (!file) return;
+    const fr = new FileReader();
+    fr.onload = async () => {
+      try {
+        const p = JSON.parse(String(fr.result || '{}'));
+        const payload = { ...p, company: p.company || 'Imported', name: p.name || file.name.replace(/\.json$/i, '') };
+        delete payload.id; delete payload.savedAt;
+        const res = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!res.ok) throw new Error();
+        notify('제품 업로드 완료'); fetchLibrary();
+      } catch { notify('제품 파일 업로드 실패', 'err'); }
+    };
+    fr.readAsText(file);
   };
 
   /* preset */
@@ -1343,7 +1406,7 @@ export default function App() {
   const applyPreset = p => {
     try {
       const rawSeries=(p.series??currentState.series).slice(0,MAX_SERIES);
-      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i],color:s.color??SERIES_COLORS[i],points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)}))}));
+      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i]??`S${i+1}`,color:s.color??seriesColor(i),points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)})),visible:s.visible!==false,crossLines:s.crossLines!==false}));
       const rawXform=Array.isArray(p.bg?.xform)?p.bg.xform:[];
       const rawAnchors=Array.isArray(p.bg?.customAnchors)?p.bg.customAnchors:[];
       const bgXform=Array(MAX_BG).fill(null).map((_,i)=>rawXform[i]??currentState.bgXform[i]??{sx:1,sy:1,offX:0,offY:0});
@@ -1387,9 +1450,9 @@ export default function App() {
         const vv = Array(MAX_BG).fill(null).map((_,i)=>i===0?(p.calibration.values ?? {x1:"",x2:"",y1:"",y2:""}):{x1:"",x2:"",y1:"",y2:""});
         setCalEnabledByBg(en); setCalClipByBg(cp); setCalPixelsByBg(px); setCalValuesByBg(vv);
       }
-      setShowRealCoords(p.ui?.showRealCoords !== false);
+      setShowRealCoords(true);
       setShowIntersectionMarkers(p.ui?.showIntersectionMarkers !== false);
-      setMagnifyOn(p.ui?.magnifyOn !== false);
+      setMagnifyOn(true);
       axesCalRefitKeyRef.current = `${next.xMin}|${next.xMax}|${next.yMin}|${next.yMax}|${!!next.xLog}|${!!next.yLog}`;
       updateState(()=>next,true); notify("Preset loaded");
     } catch { notify("Invalid preset","err"); }
@@ -1529,8 +1592,8 @@ export default function App() {
 
   /* data for panels */
   const guideRows = [];
-  for (const gx of guideXs) { const label=guideXLabels[gx]??fmtReal(gx); currentState.series.forEach(s=>guideRows.push({kind:"X",guide:gx,guideLabel:label,series:s.name,value:yAtX(s.points,gx)})); }
-  for (const gy of guideYs) { const label=guideYLabels[gy]??fmtReal(gy); currentState.series.forEach(s=>guideRows.push({kind:"Y",guide:gy,guideLabel:label,series:s.name,value:xAtY(s.points,gy)})); }
+  for (const gx of guideXs) { const label=guideXLabels[gx]??fmtReal(gx); currentState.series.filter(s=>s.visible!==false&&s.crossLines!==false).forEach(s=>guideRows.push({kind:"X",guide:gx,guideLabel:label,series:s.name,value:yAtX(s.points,gx)})); }
+  for (const gy of guideYs) { const label=guideYLabels[gy]??fmtReal(gy); currentState.series.filter(s=>s.visible!==false&&s.crossLines!==false).forEach(s=>guideRows.push({kind:"Y",guide:gy,guideLabel:label,series:s.name,value:xAtY(s.points,gy)})); }
   const seriesIntersectionsAll = computeSeriesIntersections();
   const seriesIntersections = showIntersectionMarkers ? seriesIntersectionsAll : [];
 
@@ -1601,7 +1664,7 @@ export default function App() {
                   <div className="space-y-2 p-2 pt-0 text-xs">
                     <div className="flex border-b border-gray-200 overflow-x-auto">
                       {BG_LABELS.map((label,i)=>(
-                        <button key={i} onClick={()=>setActiveBg(i)} className={`-mb-px flex-shrink-0 border-b-2 px-2 py-1 text-xs font-semibold ${activeBg===i?"border-blue-500 text-blue-600":"border-transparent text-gray-500 hover:border-gray-300"}`}>
+                        <button key={i} onClick={()=>selectSlot(i)} className={`-mb-px flex-shrink-0 border-b-2 px-2 py-1 text-xs font-semibold ${activeBg===i?"border-blue-500 text-blue-600":"border-transparent text-gray-500 hover:border-gray-300"}`}>
                           {label}{bgList[i]?" *":""}
                         </button>
                       ))}
@@ -1698,7 +1761,7 @@ export default function App() {
                     <span className="font-bold">Active:</span>
                     {currentState.series.map((s,i)=>(
                       <label key={i} className="flex items-center gap-1">
-                        <input type="radio" className="h-3 w-3" name="series" checked={activeSeries===i} onChange={()=>{setActiveSeries(i);setSelectedPoint(null);}}/>
+                        <input type="radio" className="h-3 w-3" name="series" checked={activeSeries===i} onChange={()=>selectSlot(i)}/>
                         <span style={{color:s.color}} className="font-bold">{s.name}</span>
                       </label>
                     ))}
@@ -1711,6 +1774,8 @@ export default function App() {
                         <div className="flex items-center gap-1">
                           <input type="color" className="h-6 w-6 cursor-pointer rounded border-0 p-0" value={s.color} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,color:e.target.value}:ss)}))}/>
                           <input className="flex-1 rounded border px-1.5 py-0.5 text-xs" value={s.name} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,name:e.target.value}:ss)}))} placeholder={"Series "+(i+1)}/>
+                          <label className="flex items-center gap-1 text-[10px]" title="곡선 표시/숨김"><input type="checkbox" checked={s.visible!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,visible:e.target.checked}:ss)}))}/>선</label>
+                          <label className="flex items-center gap-1 text-[10px]" title="이 제품의 교차선 표시"><input type="checkbox" checked={s.crossLines!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,crossLines:e.target.checked}:ss)}))}/>교차선</label>
                           {currentState.series.length>1&&(
                             <button className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 hover:bg-red-200"
                               onClick={()=>{
@@ -1749,11 +1814,21 @@ export default function App() {
                     <button className="w-full rounded border border-dashed border-gray-400 py-1 text-xs text-gray-600 hover:bg-gray-50"
                       onClick={()=>{
                         const idx=currentState.series.length;
-                        updateState(p=>({...p,series:[...p.series,{name:SERIES_NAMES[idx]??"S"+(idx+1),color:SERIES_COLORS[idx]??"#64748B",points:[]}]}));
+                        updateState(p=>({...p,series:[...p.series,{name:SERIES_NAMES[idx]??"S"+(idx+1),color:seriesColor(idx),points:[],visible:true,crossLines:true}]}));
                         setMinBreakCurrents(prev=>[...prev,null]);
                         setActiveSeries(idx);
                       }}>+ Add Series ({currentState.series.length}/{MAX_SERIES})</button>
                   )}
+
+                  <div className="rounded border border-emerald-200 bg-emerald-50 p-2 space-y-1.5">
+                    <div className="text-[11px] font-bold text-emerald-800">제품 곡선 복제·이동</div>
+                    <div className="grid grid-cols-3 gap-1">
+                      <input className="rounded border px-1 py-1 text-[10px]" value={duplicateBaseCurrent} onChange={e=>setDuplicateBaseCurrent(e.target.value)} placeholder="기준 1000A"/>
+                      <input className="rounded border px-1 py-1 text-[10px]" value={duplicateTargetCurrent} onChange={e=>{setDuplicateTargetCurrent(e.target.value);setDuplicateName(e.target.value.replace(/[^0-9.]/g,"")+"A");}} placeholder="목표 1100A"/>
+                      <input className="rounded border px-1 py-1 text-[10px]" value={duplicateName} onChange={e=>setDuplicateName(e.target.value)} placeholder="새 이름"/>
+                    </div>
+                    <button className="w-full rounded bg-emerald-600 py-1 text-[11px] font-bold text-white hover:bg-emerald-700" onClick={duplicateShiftedSeries}>활성 곡선 복제 후 X축 이동</button>
+                  </div>
 
 
                   <div className="!mt-2 grid grid-cols-2 gap-x-2 gap-y-2 border-t border-gray-200 pt-2">
@@ -2090,15 +2165,17 @@ export default function App() {
                 {/* Save panel */}
                 <div className="w-56 flex-shrink-0 border-r border-gray-200 p-3 flex flex-col gap-2 text-xs">
                   <p className="font-semibold text-gray-700 text-[11px] uppercase tracking-wide">Save Product</p>
+                  <button onClick={()=>productFileRef.current?.click()} className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">제품 JSON 업로드</button>
+                  <input ref={productFileRef} type="file" accept="application/json,.json" hidden onChange={e=>{uploadProductFile(e.target.files?.[0]);e.target.value="";}}/>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Company" value={saveFormCompany} onChange={e=>setSaveFormCompany(e.target.value)}/>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Product name" value={saveFormName} onChange={e=>setSaveFormName(e.target.value)}/>
                   <p className="text-[10px] text-gray-400">이미지 슬롯(A–E)별로 곡선·배경이 함께 저장됩니다. 같은 회사·제품명은 슬롯마다 따로 보관됩니다.</p>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {Array.from({ length: MAX_SERIES }, (_, slot) => (
+                    {currentState.series.map((series, slot) => (
                       <button key={slot} onClick={()=>saveToLibrary(slot)}
                         className="rounded py-2 text-[11px] font-bold transition-opacity hover:opacity-80"
-                        style={{background:SERIES_COLORS[slot]+"22",color:SERIES_COLORS[slot],border:`1.5px solid ${SERIES_COLORS[slot]}88`}}>
-                        Save {SERIES_NAMES[slot]}
+                        style={{background:series.color+"22",color:series.color,border:`1.5px solid ${series.color}88`}}>
+                        Save {series.name}
                       </button>
                     ))}
                   </div>
@@ -2137,12 +2214,16 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="flex flex-wrap gap-1 justify-end max-w-[200px]">
-                              {Array.from({ length: MAX_SERIES }, (_, slot) => (
+                              {Array.from({ length: MAX_BG }, (_, slot) => (
                               <button key={slot} onClick={()=>loadFromLibrary(p.id,slot)} title={'Load to slot '+SERIES_NAMES[slot]}
                                 className="rounded px-1.5 py-0.5 text-[10px] font-bold hover:opacity-90 flex-shrink-0 border"
                                 style={{background:SERIES_COLORS[slot]+"22",color:SERIES_COLORS[slot],borderColor:SERIES_COLORS[slot]+"88"}}>&#8594;{SERIES_NAMES[slot]}</button>
                               ))}
+                              {currentState.series.length<MAX_SERIES&&<button onClick={()=>loadFromLibrary(p.id,currentState.series.length)} title="Load as a new visible curve"
+                                className="rounded px-1.5 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-300">+New</button>}
                               </div>
+                              <button onClick={()=>downloadProduct(p.id)} title="Download product JSON"
+                                className="rounded bg-sky-100 text-sky-700 px-2 py-1 text-[10px] hover:bg-sky-200 flex-shrink-0">JSON</button>
                               <button onClick={()=>deleteFromLibrary(p.id)} title="Delete"
                                 className="rounded bg-red-100 text-red-600 px-2 py-1 text-[10px] hover:bg-red-200 flex-shrink-0">Del</button>
                             </div>
@@ -2183,7 +2264,7 @@ export default function App() {
                 onChange={e=>{setLoginPwInput(e.target.value);setLoginError(false);}}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){
-                    if(loginUserInput==="admin"&&loginPwInput==="3150"){
+                    if(loginUserInput==="sinofuse"&&loginPwInput==="2023!!"){
                       setLoggedInUser(loginUserInput);setShowLoginModal(false);notify("로그인 성공");
                     } else { setLoginError(true); }
                   }
@@ -2198,7 +2279,7 @@ export default function App() {
               <button
                 className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white hover:bg-blue-700"
                 onClick={()=>{
-                  if(loginUserInput==="admin"&&loginPwInput==="3150"){
+                  if(loginUserInput==="sinofuse"&&loginPwInput==="2023!!"){
                     setLoggedInUser(loginUserInput);setShowLoginModal(false);notify("로그인 성공");
                   } else { setLoginError(true); }
                 }}>로그인</button>
