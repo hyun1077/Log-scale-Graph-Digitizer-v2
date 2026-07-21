@@ -1,5 +1,4 @@
 {
-  "rootDirectory": "log-digitizer-vite",
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
