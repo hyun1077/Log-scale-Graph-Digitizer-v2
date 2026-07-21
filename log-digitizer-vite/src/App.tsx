@@ -101,7 +101,14 @@ export default function App() {
 
   const [activeSeries, setActiveSeries] = useState(0);
   const [selectedPoint, setSelectedPoint] = useState(null);
-  const selectSlot = (i: number) => { setActiveSeries(i); if (i < MAX_BG) setActiveBg(i); setSelectedPoint(null); };
+  const selectSlot = (i: number) => {
+    setActiveSeries(i);
+    if (i < MAX_BG) {
+      setActiveBg(i);
+      setShowBgs(prev => prev.map((_, j) => j === i));
+    }
+    setSelectedPoint(null);
+  };
 
   const [connectLines, setConnectLines] = useState(true);
   const [lineWidth, setLineWidth] = useState(1.6);
@@ -614,6 +621,8 @@ export default function App() {
   /* keyboard */
   useEffect(() => {
     const onKey = e => {
+      const tag = String(e.target?.tagName ?? "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
       if (e.key === "Escape") { setPickAnchor(false); setSelectedPoint(null); setCalPick(null); setSelectedCalPoint(null); }
       const arrows = ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"];
       if (!arrows.includes(e.key)) return;
@@ -647,11 +656,27 @@ export default function App() {
           n[activeBg] = { ...xf, offX: xf.offX + (e.key==="ArrowLeft"?-step:e.key==="ArrowRight"?step:0), offY: xf.offY + (e.key==="ArrowUp"?-step:e.key==="ArrowDown"?step:0) };
           return { ...prev, bgXform: n };
         });
+        return;
+      }
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && currentState.series[activeSeries]) {
+        const stepPx = e.shiftKey ? 0.25 : 1;
+        const delta = e.key === "ArrowLeft" ? -stepPx : stepPx;
+        updateState(prev => ({
+          ...prev,
+          series: prev.series.map((s, si) => {
+            if (si !== activeSeries) return s;
+            const points = s.points.map(p => {
+              const px = dataToPixel(p.x, p.y);
+              return pixelToData(px.px + delta, px.py);
+            });
+            return { ...s, points, basePoints: points.map(p => ({ ...p })), shiftMultiplier: 1 };
+          }),
+        }));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedPoint, selectedCalPoint, bgEditMode, activeBg, currentState, calPixels]);
+  }, [selectedPoint, selectedCalPoint, bgEditMode, activeBg, activeSeries, currentState, calPixels]);
 
   const cursorForHandle = (handle, bgEdit, picking, calPicking) => {
     if (calPicking) return "crosshair";
@@ -1309,7 +1334,7 @@ export default function App() {
     const shiftMultiplier = (source.shiftMultiplier ?? 1) * lastCurveShift;
     const shifted = {
       ...source,
-      name: BG_LABELS[idx] ?? `S${idx + 1}`,
+      name: source.name,
       color: seriesColor(idx),
       basePoints,
       shiftMultiplier,
@@ -1360,6 +1385,18 @@ export default function App() {
       imageData: bgUrls.current[slot] ?? null,
       bgXform: currentState.bgXform[slot],
       customAnchor: currentState.customAnchors[slot] ?? null,
+      imageSettings: {
+        bgXform: currentState.bgXform[slot],
+        customAnchor: currentState.customAnchors[slot] ?? null,
+        opacity: opacityBgs[slot] ?? BG_DEFAULT_OPACITY[slot],
+        keepAspect,
+        calibration: {
+          enabled: !!calEnabledByBg[slot],
+          clip: !!calClipByBg[slot],
+          pixels: calPixelsByBg[slot],
+          values: calValuesByBg[slot],
+        },
+      },
       seriesName: s?.name ?? SERIES_NAMES[slot] ?? 'S',
       seriesColor: s?.color ?? SERIES_COLORS[slot] ?? '#64748B',
       points: s?.points ?? [],
@@ -1377,6 +1414,7 @@ export default function App() {
       const res = await fetch('/api/products/' + itemId);
       if (!res.ok) { notify('Load failed', 'err'); return; }
       const product = await res.json();
+      const imageSettings = product.imageSettings ?? {};
       if (product.imageData && targetSlot < MAX_BG) {
         const img = new Image(); img.crossOrigin = "anonymous";
         img.onload = () => {
@@ -1390,14 +1428,25 @@ export default function App() {
       updateState(prev => {
         const newBgXform = [...prev.bgXform];
         const newAnchors = [...prev.customAnchors];
-        if (targetSlot < MAX_BG && product.bgXform) newBgXform[targetSlot] = product.bgXform;
-        if (targetSlot < MAX_BG) newAnchors[targetSlot] = product.customAnchor ?? null;
+        if (targetSlot < MAX_BG && (imageSettings.bgXform || product.bgXform)) newBgXform[targetSlot] = imageSettings.bgXform ?? product.bgXform;
+        if (targetSlot < MAX_BG) newAnchors[targetSlot] = imageSettings.customAnchor ?? product.customAnchor ?? null;
         const newSeries = [...prev.series];
         while (newSeries.length <= targetSlot) newSeries.push({ name: SERIES_NAMES[newSeries.length] ?? `S${newSeries.length+1}`, color: seriesColor(newSeries.length), points: [], visible: true, crossLines: true });
         newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? seriesColor(targetSlot), points: product.points ?? [], visible: true, crossLines: true };
         return { ...prev, bgXform: newBgXform, customAnchors: newAnchors, series: newSeries };
       });
       setMinBreakCurrents(prev => { const n = [...prev]; while (n.length <= targetSlot) n.push(null); n[targetSlot] = product.minBreakCurrent ?? null; return n; });
+      if (targetSlot < MAX_BG) {
+        setOpacityBgs(prev => { const n=[...prev]; n[targetSlot]=Number(imageSettings.opacity ?? BG_DEFAULT_OPACITY[targetSlot]); return n; });
+        if (typeof imageSettings.keepAspect === "boolean") setKeepAspect(imageSettings.keepAspect);
+        const calibration = imageSettings.calibration;
+        if (calibration) {
+          setCalEnabledForBg(targetSlot, !!calibration.enabled);
+          setCalClipForBg(targetSlot, !!calibration.clip);
+          setCalPixelsForBg(targetSlot, calibration.pixels ?? {x1:null,x2:null,y1:null,y2:null});
+          setCalValuesForBg(targetSlot, calibration.values ?? {x1:"",x2:"",y1:"",y2:""});
+        }
+      }
       if (product.minBreakCurrent != null) setMinBreakInputs(prev => ({ ...prev, [targetSlot]: String(product.minBreakCurrent) }));
       selectSlot(targetSlot);
       notify('Loaded to slot ' + SERIES_NAMES[targetSlot]);
@@ -1812,7 +1861,7 @@ export default function App() {
                     {currentState.series.map((s,i)=>(
                       <label key={i} className="flex items-center gap-1">
                         <input type="radio" className="h-3 w-3" name="series" checked={activeSeries===i} onChange={()=>selectSlot(i)}/>
-                        <span style={{color:s.color}} className="font-bold">{s.name}</span>
+                        <span style={{color:s.color}} className="font-bold">{BG_LABELS[i]} · {s.name}</span>
                       </label>
                     ))}
                   </div>
@@ -1886,6 +1935,7 @@ export default function App() {
                     </div>
                     <button className="w-full rounded bg-emerald-600 py-1 text-[11px] font-bold text-white hover:bg-emerald-700" onClick={duplicateAtSameSpacing}>+ 마지막 이동 간격으로 다음 곡선 추가</button>
                     <div className="text-[9px] text-emerald-700">새 곡선과 이미지 슬롯은 다음 글자({BG_LABELS[currentState.series.length] ?? "-"})로 함께 생성됩니다.</div>
+                    <div className="rounded bg-white px-2 py-1 text-[9px] text-emerald-800">Active 곡선 선택 후 ←/→: 1px 미세 이동 · Shift+←/→: 0.25px 초정밀 이동</div>
                   </div>
 
 
