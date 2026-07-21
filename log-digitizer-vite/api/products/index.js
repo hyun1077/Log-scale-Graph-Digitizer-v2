@@ -76,7 +76,7 @@ export default async function handler(req, res) {
       const anchorJson  = b.customAnchor ? JSON.stringify(b.customAnchor) : null;
       const rawSlot = Number(b.sourceSlot);
       const sourceSlot =
-        Number.isFinite(rawSlot) && rawSlot >= 0 && rawSlot <= 4 ? Math.floor(rawSlot) : 0;
+        Number.isFinite(rawSlot) && rawSlot >= 0 && rawSlot < 20 ? Math.floor(rawSlot) : 0;
 
       const existing = await sql`
         SELECT id FROM products
