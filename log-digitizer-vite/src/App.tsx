@@ -1248,7 +1248,12 @@ export default function App() {
       for (let si=0;si<currentState.series.length;si++) {
         for (let pi=0;pi<currentState.series[si].points.length;pi++) {
           const p=currentState.series[si].points[pi]; const {px:ppx,py:ppy}=dataToPixel(p.x,p.y);
-          if (Math.hypot(px-ppx,py-ppy)<ptRadius+4) { setSelectedPoint({seriesIndex:si,pointIndex:pi}); return; }
+          if (Math.hypot(px-ppx,py-ppy)<ptRadius+4) {
+            const isSamePoint = selectedPoint?.seriesIndex === si && selectedPoint?.pointIndex === pi;
+            setSelectedPoint(isSamePoint ? null : { seriesIndex: si, pointIndex: pi });
+            if (isSamePoint) notify("점 선택 해제 — 화살표 키로 전체 곡선을 이동할 수 있습니다");
+            return;
+          }
         }
       }
       const d=pixelToData(px,py);
