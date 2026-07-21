@@ -16,7 +16,7 @@ const BG_DEFAULT_OPACITY = Array.from({ length: MAX_BG }, (_, i) => i === 0 ? 1 
 const seriesColor = (i: number) => SERIES_COLORS[i] ?? `hsl(${(i * 67) % 360} 70% 45%)`;
 
 type Pt = { x: number; y: number };
-type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean };
+type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean; basePoints?: Pt[]; shiftMultiplier?: number };
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
@@ -1274,9 +1274,12 @@ export default function App() {
     const multiplier = direction === "right" ? step : 1 / step;
     updateState(prev => ({
       ...prev,
-      series: prev.series.map((s, i) => i === activeSeries
-        ? { ...s, points: s.points.map(p => ({ ...p, x: p.x * multiplier })) }
-        : s),
+      series: prev.series.map((s, i) => {
+        if (i !== activeSeries) return s;
+        const basePoints = (s.basePoints ?? s.points).map(p => ({ ...p }));
+        const shiftMultiplier = (s.shiftMultiplier ?? 1) * multiplier;
+        return { ...s, basePoints, shiftMultiplier, points: basePoints.map(p => ({ ...p, x: p.x * shiftMultiplier })) };
+      }),
     }));
     setMinBreakCurrents(prev => prev.map((v, i) => i === activeSeries && v != null ? Number(v) * multiplier : v));
     setLastCurveShift(multiplier);
@@ -1288,11 +1291,15 @@ export default function App() {
     if (!source || source.points.length === 0) { notify("복제할 제품 곡선이 없습니다", "err"); return; }
     if (currentState.series.length >= MAX_SERIES) { notify(`최대 ${MAX_SERIES}개 곡선까지 가능합니다`, "err"); return; }
     const idx = currentState.series.length;
+    const basePoints = (source.basePoints ?? source.points).map(p => ({ ...p }));
+    const shiftMultiplier = (source.shiftMultiplier ?? 1) * lastCurveShift;
     const shifted = {
       ...source,
       name: BG_LABELS[idx] ?? `S${idx + 1}`,
       color: seriesColor(idx),
-      points: source.points.map(p => ({ ...p, x: p.x * lastCurveShift })),
+      basePoints,
+      shiftMultiplier,
+      points: basePoints.map(p => ({ ...p, x: p.x * shiftMultiplier })),
       visible: true,
       crossLines: true,
     };
@@ -1308,7 +1315,12 @@ export default function App() {
       bgUrls.current[idx] = bgUrls.current[activeBg];
       setBgList(prev => { const n = [...prev]; n[idx] = prev[activeBg] ? { ...prev[activeBg] } : null; return n; });
       setShowBgs(prev => { const n = [...prev]; n[idx] = true; return n; });
+      setOpacityBgs(prev => { const n = [...prev]; n[idx] = prev[activeBg] ?? BG_DEFAULT_OPACITY[idx]; return n; });
     }
+    setCalEnabledByBg(prev => { const n = [...prev]; n[idx] = !!prev[activeBg]; return n; });
+    setCalClipByBg(prev => { const n = [...prev]; n[idx] = !!prev[activeBg]; return n; });
+    setCalPixelsByBg(prev => { const n = [...prev]; n[idx] = JSON.parse(JSON.stringify(prev[activeBg] ?? {x1:null,x2:null,y1:null,y2:null})); return n; });
+    setCalValuesByBg(prev => { const n = [...prev]; n[idx] = { ...(prev[activeBg] ?? {x1:"",x2:"",y1:"",y2:""}) }; return n; });
     setMinBreakCurrents(prev => [...prev, (prev[activeSeries] ?? null) != null ? Number(prev[activeSeries]) * lastCurveShift : null]);
     selectSlot(idx);
     notify(`${shifted.name} 곡선을 같은 간격으로 추가`);
@@ -1430,7 +1442,7 @@ export default function App() {
   const applyPreset = p => {
     try {
       const rawSeries=(p.series??currentState.series).slice(0,MAX_SERIES);
-      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i]??`S${i+1}`,color:s.color??seriesColor(i),points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)})),visible:s.visible!==false,crossLines:s.crossLines!==false}));
+      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i]??`S${i+1}`,color:s.color??seriesColor(i),points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)})),basePoints:Array.isArray(s.basePoints)?s.basePoints.map(pt=>({x:Number(pt.x),y:Number(pt.y)})):undefined,shiftMultiplier:isFinite(Number(s.shiftMultiplier))?Number(s.shiftMultiplier):undefined,visible:s.visible!==false,crossLines:s.crossLines!==false}));
       const rawXform=Array.isArray(p.bg?.xform)?p.bg.xform:[];
       const rawAnchors=Array.isArray(p.bg?.customAnchors)?p.bg.customAnchors:[];
       const bgXform=Array(MAX_BG).fill(null).map((_,i)=>rawXform[i]??currentState.bgXform[i]??{sx:1,sy:1,offX:0,offY:0});
