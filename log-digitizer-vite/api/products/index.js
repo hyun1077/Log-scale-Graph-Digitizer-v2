@@ -23,11 +23,13 @@ async function ensureTable(sql) {
       image_data    TEXT,
       bg_xform      JSONB,
       custom_anchor JSONB,
+      image_settings JSONB,
       min_break_current FLOAT,
       source_slot   INTEGER NOT NULL DEFAULT 0
     )
   `;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS source_slot INTEGER NOT NULL DEFAULT 0`;
+  await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_settings JSONB`;
 }
 
 function rowToProduct(r, includeImage = false) {
@@ -41,6 +43,7 @@ function rowToProduct(r, includeImage = false) {
     points:           r.points ?? [],
     bgXform:          r.bg_xform,
     customAnchor:     r.custom_anchor,
+    imageSettings:    r.image_settings,
     minBreakCurrent:  r.min_break_current,
     sourceSlot:       r.source_slot != null && r.source_slot !== '' ? Number(r.source_slot) : undefined,
     ...(includeImage ? { imageData: r.image_data } : {}),
@@ -61,7 +64,7 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const rows = await sql`
         SELECT id, company, name, saved_at, series_name, series_color,
-               points, bg_xform, custom_anchor, min_break_current, source_slot
+               points, bg_xform, custom_anchor, image_settings, min_break_current, source_slot
         FROM products ORDER BY saved_at DESC
       `;
       return res.json(rows.map(r => rowToProduct(r, false)));
@@ -74,6 +77,7 @@ export default async function handler(req, res) {
       const pointsJson  = JSON.stringify(b.points ?? []);
       const bgXformJson = JSON.stringify(b.bgXform ?? {});
       const anchorJson  = b.customAnchor ? JSON.stringify(b.customAnchor) : null;
+      const imageSettingsJson = b.imageSettings ? JSON.stringify(b.imageSettings) : null;
       const rawSlot = Number(b.sourceSlot);
       const sourceSlot =
         Number.isFinite(rawSlot) && rawSlot >= 0 && rawSlot < 20 ? Math.floor(rawSlot) : 0;
@@ -93,6 +97,7 @@ export default async function handler(req, res) {
             image_data        = ${b.imageData ?? null},
             bg_xform          = ${bgXformJson}::jsonb,
             custom_anchor     = ${anchorJson}::jsonb,
+            image_settings    = ${imageSettingsJson}::jsonb,
             min_break_current = ${b.minBreakCurrent ?? null},
             source_slot       = ${sourceSlot}
           WHERE id = ${existing[0].id}
@@ -102,7 +107,7 @@ export default async function handler(req, res) {
         await sql`
           INSERT INTO products
             (id, company, name, series_name, series_color, points,
-             image_data, bg_xform, custom_anchor, min_break_current, source_slot)
+             image_data, bg_xform, custom_anchor, image_settings, min_break_current, source_slot)
           VALUES (
             ${id}, ${b.company}, ${b.name},
             ${b.seriesName ?? null}, ${b.seriesColor ?? null},
@@ -110,6 +115,7 @@ export default async function handler(req, res) {
             ${b.imageData ?? null},
             ${bgXformJson}::jsonb,
             ${anchorJson}::jsonb,
+            ${imageSettingsJson}::jsonb,
             ${b.minBreakCurrent ?? null},
             ${sourceSlot}
           )
