@@ -7,12 +7,12 @@ import { type Sample } from "./lib/i2t";
  * v5.1 - images x5, series x5, intersections, min-break dashed lines
  */
 
-const MAX_BG = 5;
+const MAX_BG = 20;
 const MAX_SERIES = 20;
 const SERIES_COLORS = ["#2563EB", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"];
 const SERIES_NAMES  = ["A", "B", "C", "D", "E"];
-const BG_LABELS     = ["A", "B", "C", "D", "E"];
-const BG_DEFAULT_OPACITY = [1, 0.7, 0.6, 0.5, 0.4];
+const BG_LABELS     = Array.from({ length: MAX_BG }, (_, i) => String.fromCharCode(65 + i));
+const BG_DEFAULT_OPACITY = Array.from({ length: MAX_BG }, (_, i) => i === 0 ? 1 : Math.max(0.25, 0.75 - i * 0.04));
 const seriesColor = (i: number) => SERIES_COLORS[i] ?? `hsl(${(i * 67) % 360} 70% 45%)`;
 
 type Pt = { x: number; y: number };
@@ -126,11 +126,9 @@ export default function App() {
   const [libraryItems, setLibraryItems] = useState([]);
   const [serverAvail, setServerAvail] = useState(false);
   const [saveFormCompany, setSaveFormCompany] = useState('');
-  const [saveFormName, setSaveFormName] = useState('');
   const [libFilter, setLibFilter] = useState('');
-  const [duplicateBaseCurrent, setDuplicateBaseCurrent] = useState("1000");
-  const [duplicateTargetCurrent, setDuplicateTargetCurrent] = useState("1100");
-  const [duplicateName, setDuplicateName] = useState("1100A");
+  const [curveShiftPercent, setCurveShiftPercent] = useState("10");
+  const [lastCurveShift, setLastCurveShift] = useState(1.1);
 
   const [magnifyOn, setMagnifyOn] = useState(true);
   const [magnifyFactor] = useState(3);
@@ -1269,26 +1267,51 @@ export default function App() {
     });
   };
 
-  const duplicateShiftedSeries = () => {
-    const base = Number(duplicateBaseCurrent.replace(/,/g, ""));
-    const target = Number(duplicateTargetCurrent.replace(/,/g, ""));
+  const shiftActiveCurve = (direction: "left" | "right") => {
+    const pct = Number(curveShiftPercent.replace(/,/g, ""));
+    if (!isFinite(pct) || pct <= 0) { notify("이동 간격(%)을 확인하세요", "err"); return; }
+    const step = 1 + pct / 100;
+    const multiplier = direction === "right" ? step : 1 / step;
+    updateState(prev => ({
+      ...prev,
+      series: prev.series.map((s, i) => i === activeSeries
+        ? { ...s, points: s.points.map(p => ({ ...p, x: p.x * multiplier })) }
+        : s),
+    }));
+    setMinBreakCurrents(prev => prev.map((v, i) => i === activeSeries && v != null ? Number(v) * multiplier : v));
+    setLastCurveShift(multiplier);
+    notify(`${currentState.series[activeSeries]?.name} 곡선을 ${direction === "right" ? "오른쪽" : "왼쪽"}으로 이동`);
+  };
+
+  const duplicateAtSameSpacing = () => {
     const source = currentState.series[activeSeries];
     if (!source || source.points.length === 0) { notify("복제할 제품 곡선이 없습니다", "err"); return; }
-    if (!(base > 0) || !(target > 0)) { notify("기준/목표 전류를 확인하세요", "err"); return; }
     if (currentState.series.length >= MAX_SERIES) { notify(`최대 ${MAX_SERIES}개 곡선까지 가능합니다`, "err"); return; }
     const idx = currentState.series.length;
-    const ratio = target / base;
     const shifted = {
-      name: duplicateName.trim() || `${target}A`,
+      ...source,
+      name: BG_LABELS[idx] ?? `S${idx + 1}`,
       color: seriesColor(idx),
-      points: source.points.map(p => ({ ...p, x: p.x * ratio })),
+      points: source.points.map(p => ({ ...p, x: p.x * lastCurveShift })),
       visible: true,
       crossLines: true,
     };
-    updateState(prev => ({ ...prev, series: [...prev.series, shifted] }));
-    setMinBreakCurrents(prev => [...prev, (minBreakCurrents[activeSeries] ?? null) != null ? Number(minBreakCurrents[activeSeries]) * ratio : null]);
+    updateState(prev => {
+      const bgXform = [...prev.bgXform];
+      const customAnchors = [...prev.customAnchors];
+      bgXform[idx] = { ...(prev.bgXform[activeBg] ?? { sx: 1, sy: 1, offX: 0, offY: 0 }) };
+      customAnchors[idx] = prev.customAnchors[activeBg] ? { ...prev.customAnchors[activeBg] } : null;
+      return { ...prev, series: [...prev.series, shifted], bgXform, customAnchors };
+    });
+    if (bgRefs.current[activeBg]) {
+      bgRefs.current[idx] = bgRefs.current[activeBg];
+      bgUrls.current[idx] = bgUrls.current[activeBg];
+      setBgList(prev => { const n = [...prev]; n[idx] = prev[activeBg] ? { ...prev[activeBg] } : null; return n; });
+      setShowBgs(prev => { const n = [...prev]; n[idx] = true; return n; });
+    }
+    setMinBreakCurrents(prev => [...prev, (prev[activeSeries] ?? null) != null ? Number(prev[activeSeries]) * lastCurveShift : null]);
     selectSlot(idx);
-    notify(`${source.name} → ${shifted.name} 복제 완료`);
+    notify(`${shifted.name} 곡선을 같은 간격으로 추가`);
   };
 
   /* product library API */
@@ -1301,11 +1324,12 @@ export default function App() {
   };
 
   const saveToLibrary = async (slot) => {
-    if (!saveFormCompany.trim() || !saveFormName.trim()) { notify("Enter company and product name", "err"); return; }
     const s = currentState.series[slot];
+    if (!saveFormCompany.trim()) { notify("회사명을 입력하세요", "err"); return; }
+    if (!s) { notify("저장할 제품 곡선을 선택하세요", "err"); return; }
     const payload = {
       company: saveFormCompany.trim(),
-      name: saveFormName.trim(),
+      name: s.name || BG_LABELS[slot] || `Product ${slot + 1}`,
       sourceSlot: slot,
       imageData: bgUrls.current[slot] ?? null,
       bgXform: currentState.bgXform[slot],
@@ -1663,7 +1687,7 @@ export default function App() {
                 {bgEditMode&&(
                   <div className="space-y-2 p-2 pt-0 text-xs">
                     <div className="flex border-b border-gray-200 overflow-x-auto">
-                      {BG_LABELS.map((label,i)=>(
+                      {BG_LABELS.slice(0, Math.min(MAX_BG, Math.max(6, currentState.series.length + 1))).map((label,i)=>(
                         <button key={i} onClick={()=>selectSlot(i)} className={`-mb-px flex-shrink-0 border-b-2 px-2 py-1 text-xs font-semibold ${activeBg===i?"border-blue-500 text-blue-600":"border-transparent text-gray-500 hover:border-gray-300"}`}>
                           {label}{bgList[i]?" *":""}
                         </button>
@@ -1821,13 +1845,18 @@ export default function App() {
                   )}
 
                   <div className="rounded border border-emerald-200 bg-emerald-50 p-2 space-y-1.5">
-                    <div className="text-[11px] font-bold text-emerald-800">제품 곡선 복제·이동</div>
-                    <div className="grid grid-cols-3 gap-1">
-                      <input className="rounded border px-1 py-1 text-[10px]" value={duplicateBaseCurrent} onChange={e=>setDuplicateBaseCurrent(e.target.value)} placeholder="기준 1000A"/>
-                      <input className="rounded border px-1 py-1 text-[10px]" value={duplicateTargetCurrent} onChange={e=>{setDuplicateTargetCurrent(e.target.value);setDuplicateName(e.target.value.replace(/[^0-9.]/g,"")+"A");}} placeholder="목표 1100A"/>
-                      <input className="rounded border px-1 py-1 text-[10px]" value={duplicateName} onChange={e=>setDuplicateName(e.target.value)} placeholder="새 이름"/>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[11px] font-bold text-emerald-800">제품 곡선 전체 이동·연속 복제</div>
+                      <label className="flex items-center gap-1 text-[10px]">간격
+                        <input className="w-14 rounded border px-1 py-0.5 text-[10px]" value={curveShiftPercent} onChange={e=>setCurveShiftPercent(e.target.value)} />%
+                      </label>
                     </div>
-                    <button className="w-full rounded bg-emerald-600 py-1 text-[11px] font-bold text-white hover:bg-emerald-700" onClick={duplicateShiftedSeries}>활성 곡선 복제 후 X축 이동</button>
+                    <div className="grid grid-cols-2 gap-1">
+                      <button className="rounded border border-emerald-400 bg-white py-1 text-[11px] font-bold text-emerald-700" onClick={()=>shiftActiveCurve("left")}>← 곡선 전체 왼쪽 이동</button>
+                      <button className="rounded border border-emerald-400 bg-white py-1 text-[11px] font-bold text-emerald-700" onClick={()=>shiftActiveCurve("right")}>곡선 전체 오른쪽 이동 →</button>
+                    </div>
+                    <button className="w-full rounded bg-emerald-600 py-1 text-[11px] font-bold text-white hover:bg-emerald-700" onClick={duplicateAtSameSpacing}>+ 마지막 이동 간격으로 다음 곡선 추가</button>
+                    <div className="text-[9px] text-emerald-700">새 곡선과 이미지 슬롯은 다음 글자({BG_LABELS[currentState.series.length] ?? "-"})로 함께 생성됩니다.</div>
                   </div>
 
 
@@ -2168,19 +2197,15 @@ export default function App() {
                   <button onClick={()=>productFileRef.current?.click()} className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">제품 JSON 업로드</button>
                   <input ref={productFileRef} type="file" accept="application/json,.json" hidden onChange={e=>{uploadProductFile(e.target.files?.[0]);e.target.value="";}}/>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Company" value={saveFormCompany} onChange={e=>setSaveFormCompany(e.target.value)}/>
-                  <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Product name" value={saveFormName} onChange={e=>setSaveFormName(e.target.value)}/>
+                  <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs">제품명: <strong>{currentState.series[activeSeries]?.name ?? "선택 없음"}</strong> (선택 곡선명 자동 사용)</div>
                   <p className="text-[10px] text-gray-400">이미지 슬롯(A–E)별로 곡선·배경이 함께 저장됩니다. 같은 회사·제품명은 슬롯마다 따로 보관됩니다.</p>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {currentState.series.map((series, slot) => (
-                      <button key={slot} onClick={()=>saveToLibrary(slot)}
-                        className="rounded py-2 text-[11px] font-bold transition-opacity hover:opacity-80"
-                        style={{background:series.color+"22",color:series.color,border:`1.5px solid ${series.color}88`}}>
-                        Save {series.name}
-                      </button>
-                    ))}
-                  </div>
+                  <button onClick={()=>saveToLibrary(activeSeries)}
+                    className="rounded py-2 text-[11px] font-bold transition-opacity hover:opacity-80"
+                    style={{background:(currentState.series[activeSeries]?.color??"#4F46E5")+"22",color:currentState.series[activeSeries]?.color??"#4F46E5",border:`1.5px solid ${(currentState.series[activeSeries]?.color??"#4F46E5")}88`}}>
+                    선택 제품 저장 ({currentState.series[activeSeries]?.name ?? "-"})
+                  </button>
                   <div className="mt-auto border-t border-gray-200 pt-2">
-                    <input className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Filter company..." value={libFilter} onChange={e=>setLibFilter(e.target.value)}/>
+                    <input className="w-full rounded border-2 border-indigo-300 px-2 py-2 text-xs" placeholder="회사명 또는 제품명 검색..." value={libFilter} onChange={e=>setLibFilter(e.target.value)}/>
                   </div>
                 </div>
                 {/* Product list */}
@@ -2192,7 +2217,8 @@ export default function App() {
                       <p className="text-[10px]">Save a product on the left to see it here.</p>
                     </div>
                   ):(()=>{
-                    const filtered=libraryItems.filter(p=>!libFilter||p.company.toLowerCase().includes(libFilter.toLowerCase())||p.name.toLowerCase().includes(libFilter.toLowerCase()));
+                    const q=libFilter.trim().toLocaleLowerCase();
+                    const filtered=libraryItems.filter(p=>!q||String(p.company??"").toLocaleLowerCase().includes(q)||String(p.name??"").toLocaleLowerCase().includes(q));
                     const companies=[...new Set(filtered.map(p=>p.company))].sort();
                     return companies.length===0?(
                       <p className="text-gray-400 text-center mt-8">No results</p>
@@ -2214,7 +2240,7 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="flex flex-wrap gap-1 justify-end max-w-[200px]">
-                              {Array.from({ length: MAX_BG }, (_, slot) => (
+                              {Array.from({ length: Math.min(currentState.series.length, MAX_BG) }, (_, slot) => (
                               <button key={slot} onClick={()=>loadFromLibrary(p.id,slot)} title={'Load to slot '+SERIES_NAMES[slot]}
                                 className="rounded px-1.5 py-0.5 text-[10px] font-bold hover:opacity-90 flex-shrink-0 border"
                                 style={{background:SERIES_COLORS[slot]+"22",color:SERIES_COLORS[slot],borderColor:SERIES_COLORS[slot]+"88"}}>&#8594;{SERIES_NAMES[slot]}</button>
