@@ -459,9 +459,20 @@ export default function App() {
     const img = new Image(); img.crossOrigin = "anonymous";
     img.onload = () => {
       bgRefs.current[idx] = img; bgUrls.current[idx] = src;
+      updateState(prev => {
+        const bgXform = [...prev.bgXform];
+        const customAnchors = [...prev.customAnchors];
+        bgXform[idx] = { sx: 1, sy: 1, offX: 0, offY: 0 };
+        customAnchors[idx] = null;
+        return { ...prev, bgXform, customAnchors };
+      });
       setBgList(cur => { const n = [...cur]; n[idx] = { w: img.width, h: img.height }; return n; });
       setShowBgs(cur => { const n = [...cur]; n[idx] = true; return n; });
       setOpacityBgs(cur => { const n = [...cur]; if (!(n[idx] > 0)) n[idx] = BG_DEFAULT_OPACITY[idx] ?? 1; return n; });
+      setCalEnabledForBg(idx, false);
+      setCalClipForBg(idx, false);
+      setCalPixelsForBg(idx, { x1: null, x2: null, y1: null, y2: null });
+      setCalValuesForBg(idx, { x1: "", x2: "", y1: "", y2: "" });
       setTick(t => t + 1);
     };
     img.onerror = () => notify("Image load failed", "err");
