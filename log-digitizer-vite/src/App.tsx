@@ -16,7 +16,7 @@ const BG_DEFAULT_OPACITY = Array.from({ length: MAX_BG }, (_, i) => i === 0 ? 1 
 const seriesColor = (i: number) => SERIES_COLORS[i] ?? `hsl(${(i * 67) % 360} 70% 45%)`;
 
 type Pt = { x: number; y: number };
-type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean; basePoints?: Pt[]; shiftMultiplier?: number };
+type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean; tolerancePercent?: 0 | 10 | 15; basePoints?: Pt[]; shiftMultiplier?: number };
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
@@ -918,6 +918,29 @@ export default function App() {
         ctx.strokeStyle = s.color;
         const minBreak = minBreakCurrents[si] ?? null;
 
+        /* product tolerance envelope: shift the complete curve on the X axis */
+        const tolerance = Number(s.tolerancePercent ?? 0);
+        if (tolerance === 10 || tolerance === 15) {
+          ctx.save();
+          ctx.strokeStyle = s.color;
+          ctx.globalAlpha = Math.min(0.72, lineAlpha);
+          ctx.lineWidth = Math.max(1, lineWidth * 0.85);
+          ctx.setLineDash([7, 5]);
+          for (const factor of [1 - tolerance / 100, 1 + tolerance / 100]) {
+            const tolerancePts = s.points.map(p => dataToPixel(p.x * factor, p.y));
+            ctx.beginPath();
+            if (smoothLines) catmullRomPath(ctx, tolerancePts, smoothAlpha);
+            else {
+              ctx.moveTo(tolerancePts[0].px, tolerancePts[0].py);
+              for (let k=1;k<tolerancePts.length;k++) ctx.lineTo(tolerancePts[k].px,tolerancePts[k].py);
+            }
+            ctx.stroke();
+          }
+          ctx.restore();
+          ctx.globalAlpha=lineAlpha;
+          ctx.lineWidth=lineWidth;
+        }
+
         const drawPath = () => {
           ctx.beginPath();
           if (smoothLines) catmullRomPath(ctx, pxPts, smoothAlpha);
@@ -1401,6 +1424,7 @@ export default function App() {
           pixels: calPixelsByBg[slot],
           values: calValuesByBg[slot],
         },
+        tolerancePercent: s.tolerancePercent ?? 0,
       },
       seriesName: s?.name ?? SERIES_NAMES[slot] ?? 'S',
       seriesColor: s?.color ?? SERIES_COLORS[slot] ?? '#64748B',
@@ -1448,7 +1472,7 @@ export default function App() {
         if (targetSlot < MAX_BG) newAnchors[targetSlot] = imageSettings.customAnchor ?? product.customAnchor ?? null;
         const newSeries = [...prev.series];
         while (newSeries.length <= targetSlot) newSeries.push({ name: SERIES_NAMES[newSeries.length] ?? `S${newSeries.length+1}`, color: seriesColor(newSeries.length), points: [], visible: true, crossLines: true });
-        newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? seriesColor(targetSlot), points: product.points ?? [], visible: true, crossLines: true };
+        newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? seriesColor(targetSlot), points: product.points ?? [], visible: true, crossLines: true, tolerancePercent: [10,15].includes(Number(imageSettings.tolerancePercent)) ? Number(imageSettings.tolerancePercent) : 0 };
         return { ...prev, bgXform: newBgXform, customAnchors: newAnchors, series: newSeries };
       });
       setMinBreakCurrents(prev => { const n = [...prev]; while (n.length <= targetSlot) n.push(null); n[targetSlot] = product.minBreakCurrent ?? null; return n; });
@@ -1521,7 +1545,7 @@ export default function App() {
   const applyPreset = p => {
     try {
       const rawSeries=(p.series??currentState.series).slice(0,MAX_SERIES);
-      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i]??`S${i+1}`,color:s.color??seriesColor(i),points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)})),basePoints:Array.isArray(s.basePoints)?s.basePoints.map(pt=>({x:Number(pt.x),y:Number(pt.y)})):undefined,shiftMultiplier:isFinite(Number(s.shiftMultiplier))?Number(s.shiftMultiplier):undefined,visible:s.visible!==false,crossLines:s.crossLines!==false}));
+      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i]??`S${i+1}`,color:s.color??seriesColor(i),points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)})),basePoints:Array.isArray(s.basePoints)?s.basePoints.map(pt=>({x:Number(pt.x),y:Number(pt.y)})):undefined,shiftMultiplier:isFinite(Number(s.shiftMultiplier))?Number(s.shiftMultiplier):undefined,visible:s.visible!==false,crossLines:s.crossLines!==false,tolerancePercent:[10,15].includes(Number(s.tolerancePercent))?Number(s.tolerancePercent):0}));
       const rawXform=Array.isArray(p.bg?.xform)?p.bg.xform:[];
       const rawAnchors=Array.isArray(p.bg?.customAnchors)?p.bg.customAnchors:[];
       const bgXform=Array(MAX_BG).fill(null).map((_,i)=>rawXform[i]??currentState.bgXform[i]??{sx:1,sy:1,offX:0,offY:0});
@@ -1954,6 +1978,28 @@ export default function App() {
                     <div className="rounded bg-white px-2 py-1 text-[9px] text-emerald-800">Active 곡선 선택 후 ←/→: 1px 미세 이동 · Shift+←/→: 0.25px 초정밀 이동</div>
                   </div>
 
+
+                  <div className="rounded border border-amber-200 bg-amber-50 p-2 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-bold text-amber-900">Product tolerance</div>
+                        <div className="text-[9px] text-amber-700">{currentState.series[activeSeries]?.name ?? "-"} curve · dashed limits on both sides</div>
+                      </div>
+                      <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                        {currentState.series[activeSeries]?.tolerancePercent ? `±${currentState.series[activeSeries].tolerancePercent}%` : "OFF"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {[0,10,15].map(percent => {
+                        const selected = Number(currentState.series[activeSeries]?.tolerancePercent ?? 0) === percent;
+                        return <button key={percent}
+                          className={`rounded border py-1 text-[11px] font-bold ${selected ? "border-amber-600 bg-amber-600 text-white" : "border-amber-300 bg-white text-amber-800 hover:bg-amber-100"}`}
+                          onClick={()=>updateState(prev=>({...prev,series:prev.series.map((s,i)=>i===activeSeries?{...s,tolerancePercent:percent}:s)}))}>
+                          {percent === 0 ? "Off" : `±${percent}%`}
+                        </button>;
+                      })}
+                    </div>
+                  </div>
 
                   <div className="!mt-2 grid grid-cols-2 gap-x-2 gap-y-2 border-t border-gray-200 pt-2">
                     <label className="col-span-2 flex items-center gap-2"><input type="checkbox" className="h-3 w-3" checked={connectLines} onChange={e=>setConnectLines(e.target.checked)}/> Connect points</label>
