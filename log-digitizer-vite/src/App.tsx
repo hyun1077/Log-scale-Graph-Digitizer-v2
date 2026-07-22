@@ -1416,6 +1416,7 @@ export default function App() {
       imageSettings: {
         bgXform: currentState.bgXform[slot],
         customAnchor: currentState.customAnchors[slot] ?? null,
+        placement: bgRefs.current[slot] ? drawRectAndAnchor(slot) : null,
         opacity: opacityBgs[slot] ?? BG_DEFAULT_OPACITY[slot],
         keepAspect,
         calibration: {
@@ -1455,21 +1456,51 @@ export default function App() {
       if (!res.ok) { notify('Load failed', 'err'); return; }
       const product = await res.json();
       const imageSettings = product.imageSettings ?? {};
+      let restoredXform = imageSettings.bgXform ?? product.bgXform ?? null;
+      let restoredAnchor = imageSettings.customAnchor ?? product.customAnchor ?? null;
       if (product.imageData && targetSlot < MAX_BG) {
         const img = new Image(); img.crossOrigin = "anonymous";
-        img.onload = () => {
-          bgRefs.current[targetSlot] = img;
-          bgUrls.current[targetSlot] = product.imageData;
-          setBgList(cur => { const n = [...cur]; n[targetSlot] = { w: img.width, h: img.height }; return n; });
-          setShowBgs(cur => { const n = [...cur]; n[targetSlot] = true; return n; });
-        };
-        img.src = product.imageData;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = product.imageData;
+        });
+        bgRefs.current[targetSlot] = img;
+        bgUrls.current[targetSlot] = product.imageData;
+        setBgList(cur => { const n = [...cur]; n[targetSlot] = { w: img.width, h: img.height }; return n; });
+        setShowBgs(cur => { const n = [...cur]; n[targetSlot] = true; return n; });
+
+        /* New saves keep the exact rendered rectangle and pivot. Rebuild the
+           transform only after the image dimensions are available. */
+        const placement = imageSettings.placement;
+        if (placement && [placement.dw, placement.dh, placement.ax, placement.ay, placement.fx, placement.fy].every(Number.isFinite)) {
+          const plot = innerRect();
+          const savedKeepAspect = typeof imageSettings.keepAspect === "boolean" ? imageSettings.keepAspect : keepAspect;
+          let base = { x: plot.x, y: plot.y, w: plot.w, h: plot.h };
+          if (savedKeepAspect && img.width > 0 && img.height > 0) {
+            const scale = Math.min(plot.w / img.width, plot.h / img.height);
+            const w = img.width * scale, h = img.height * scale;
+            base = { x: plot.x + (plot.w - w) / 2, y: plot.y + (plot.h - h) / 2, w, h };
+          }
+          restoredXform = {
+            sx: placement.dw / base.w,
+            sy: placement.dh / base.h,
+            offX: 0,
+            offY: 0,
+          };
+          restoredAnchor = {
+            ax: placement.ax,
+            ay: placement.ay,
+            fx: placement.fx,
+            fy: placement.fy,
+          };
+        }
       }
       updateState(prev => {
         const newBgXform = [...prev.bgXform];
         const newAnchors = [...prev.customAnchors];
-        if (targetSlot < MAX_BG && (imageSettings.bgXform || product.bgXform)) newBgXform[targetSlot] = imageSettings.bgXform ?? product.bgXform;
-        if (targetSlot < MAX_BG) newAnchors[targetSlot] = imageSettings.customAnchor ?? product.customAnchor ?? null;
+        if (targetSlot < MAX_BG && restoredXform) newBgXform[targetSlot] = restoredXform;
+        if (targetSlot < MAX_BG) newAnchors[targetSlot] = restoredAnchor;
         const newSeries = [...prev.series];
         while (newSeries.length <= targetSlot) newSeries.push({ name: SERIES_NAMES[newSeries.length] ?? `S${newSeries.length+1}`, color: seriesColor(newSeries.length), points: [], visible: true, crossLines: true });
         newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? seriesColor(targetSlot), points: product.points ?? [], visible: true, crossLines: true, tolerancePercent: [10,15].includes(Number(imageSettings.tolerancePercent)) ? Number(imageSettings.tolerancePercent) : 0 };
