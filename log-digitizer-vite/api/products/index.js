@@ -10,6 +10,9 @@ function getDb() {
   return neon(url);
 }
 
+const ADMIN_AUTH = 'c2lub2Z1c2U6MjAyMyEh';
+const isAdmin = req => req.headers['x-admin-auth'] === ADMIN_AUTH;
+
 async function ensureTable(sql) {
   await sql`
     CREATE TABLE IF NOT EXISTS products (
@@ -53,7 +56,7 @@ function rowToProduct(r, includeImage = false) {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Auth');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
@@ -88,6 +91,7 @@ export default async function handler(req, res) {
       `;
 
       if (existing.length > 0) {
+        if (!isAdmin(req)) return res.status(401).json({ error: 'Login required to overwrite a product' });
         await sql`
           UPDATE products SET
             saved_at          = NOW(),
