@@ -48,6 +48,38 @@ const parseLargestEngineeringValue = (raw: unknown): number | null => {
   const lines = String(raw ?? "").split(/\r?\n|;/).map(parseEngineeringValue).filter((v): v is number => v != null);
   return lines.length ? Math.max(...lines) : null;
 };
+
+const TEMPERATURE_DERATING = [
+  [20,1],[25,0.99],[30,0.98],[35,0.97],[40,0.95],[45,0.93],[50,0.89],
+  [55,0.86],[60,0.83],[65,0.80],[70,0.77],[75,0.74],[80,0.70],[85,0.67],
+];
+const ALTITUDE_DERATING = [
+  [2000,1],[2500,0.975],[3000,0.950],[3500,0.925],
+  [4000,0.900],[4500,0.875],[5000,0.850],
+];
+const BUSBAR_STANDARD = [
+  [2,1],[4,1],[5,1],[8,1.5],[10,1.5],[12,1.5],[16,2.5],[20,2.5],
+  [25,4],[32,6],[40,10],[50,10],[63,16],[80,25],[100,35],[125,50],
+  [160,70],[200,95],[224,95],[250,120],[280,120],[315,185],[350,185],
+  [400,240],[425,240],[500,300],[630,370],[800,480],[1000,600],[1250,800],
+];
+const interpolateFactor = (ratioPercent: number) => {
+  const points = [[40,0.9],[50,0.925],[60,0.95],[70,0.975],[80,1],[120,1],[130,1.025],[140,1.05]];
+  if (ratioPercent <= points[0][0]) return points[0][1];
+  if (ratioPercent >= points.at(-1)[0]) return points.at(-1)[1];
+  for (let i=0;i<points.length-1;i++) {
+    const [x1,y1]=points[i], [x2,y2]=points[i+1];
+    if (ratioPercent >= x1 && ratioPercent <= x2) {
+      return y1 + (ratioPercent-x1)/(x2-x1)*(y2-y1);
+    }
+  }
+  return 1;
+};
+const standardBusbarArea = (current: number) => {
+  if (!(current > 0)) return null;
+  const match = BUSBAR_STANDARD.find(([rated]) => rated >= current);
+  return match ? match[1] : current;
+};
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
@@ -167,7 +199,7 @@ export default function App() {
   const [coordLowerId, setCoordLowerId] = useState("");
   const [coordInputs, setCoordInputs] = useState({
     systemVoltage: "", loadCurrent: "", faultCurrent: "",
-    temperatureFactor: "1", altitudeFactor: "1", installationFactor: "1", otherFactor: "1",
+    temperatureC: "20", altitudeM: "2000", busbarArea: "", comprehensiveFactor: "0.8",
     curveTolerance: "10", requiredPassRate: "90",
   });
   const [serverAvail, setServerAvail] = useState(false);
@@ -1971,14 +2003,18 @@ export default function App() {
   const seriesIntersectionsAll = computeSeriesIntersections();
   const seriesIntersections = showIntersectionMarkers ? seriesIntersectionsAll : [];
 
-  const factorKeys = ["temperatureFactor","altitudeFactor","installationFactor","otherFactor"];
-  const totalDeratingFactor = factorKeys.reduce((acc, key) => {
-    const value = Number(coordInputs[key]);
-    return acc * (Number.isFinite(value) && value > 0 ? value : 1);
-  }, 1);
   const systemVoltageForCheck = Number(coordInputs.systemVoltage);
   const loadCurrentForCheck = Number(coordInputs.loadCurrent);
   const faultCurrentForCheck = Number(coordInputs.faultCurrent);
+  const temperatureFactor = TEMPERATURE_DERATING.find(([temperature]) => temperature === Number(coordInputs.temperatureC))?.[1] ?? 1;
+  const altitudeFactor = ALTITUDE_DERATING.find(([altitude]) => altitude === Number(coordInputs.altitudeM))?.[1] ?? 1;
+  const requiredBusbarArea = standardBusbarArea(loadCurrentForCheck);
+  const selectedBusbarArea = Number(coordInputs.busbarArea);
+  const busbarRatio = requiredBusbarArea && selectedBusbarArea > 0 ? selectedBusbarArea / requiredBusbarArea * 100 : null;
+  const busbarFactor = busbarRatio == null ? 1 : interpolateFactor(busbarRatio);
+  const comprehensiveFactor = Number(coordInputs.comprehensiveFactor);
+  const totalDeratingFactor = temperatureFactor * altitudeFactor * busbarFactor *
+    (Number.isFinite(comprehensiveFactor) && comprehensiveFactor > 0 ? comprehensiveFactor : 0.8);
 
   const evaluateProductFit = product => {
     const specs = product.specs ?? {};
@@ -2853,15 +2889,38 @@ export default function App() {
                   </div>
                 </section>
                 <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                  <h3 className="mb-2 text-xs font-bold text-emerald-900">2. 경감계수</h3>
+                  <h3 className="mb-2 text-xs font-bold text-emerald-900">2. 경감계수 자동 계산</h3>
                   <div className="grid grid-cols-2 gap-2 text-[11px]">
-                    {[["temperatureFactor","온도"],["altitudeFactor","고도"],["installationFactor","설치/환기"],["otherFactor","기타"]].map(([key,label])=>(
-                      <label key={key}>{label}
-                        <input type="number" min="0.01" max="2" step="0.01" className="mt-0.5 w-full rounded border border-emerald-200 bg-white px-2 py-1" value={coordInputs[key]} onChange={e=>setCoordInputs(p=>({...p,[key]:e.target.value}))}/>
-                      </label>
-                    ))}
+                    <label>주위 온도 (°C)
+                      <select className="mt-0.5 w-full rounded border border-emerald-200 bg-white px-2 py-1" value={coordInputs.temperatureC} onChange={e=>setCoordInputs(p=>({...p,temperatureC:e.target.value}))}>
+                        {TEMPERATURE_DERATING.map(([temperature,factor])=><option key={temperature} value={temperature}>{temperature}°C — {factor.toFixed(2)}</option>)}
+                      </select>
+                    </label>
+                    <label>사용 고도 (m)
+                      <select className="mt-0.5 w-full rounded border border-emerald-200 bg-white px-2 py-1" value={coordInputs.altitudeM} onChange={e=>setCoordInputs(p=>({...p,altitudeM:e.target.value}))}>
+                        {ALTITUDE_DERATING.map(([altitude,factor])=><option key={altitude} value={altitude}>{altitude.toLocaleString()}m 이하 — {factor.toFixed(3)}</option>)}
+                      </select>
+                    </label>
+                    <label>선택 버스바 면적 (mm²)
+                      <input type="number" min="0" step="0.1" placeholder={requiredBusbarArea ? `기준 ${requiredBusbarArea} mm²` : "부하전류 먼저 입력"} className="mt-0.5 w-full rounded border border-emerald-200 bg-white px-2 py-1" value={coordInputs.busbarArea} onChange={e=>setCoordInputs(p=>({...p,busbarArea:e.target.value}))}/>
+                    </label>
+                    <label>종합 경감계수
+                      <input type="number" min="0.01" max="1" step="0.01" className="mt-0.5 w-full rounded border border-emerald-200 bg-white px-2 py-1" value={coordInputs.comprehensiveFactor} onChange={e=>setCoordInputs(p=>({...p,comprehensiveFactor:e.target.value}))}/>
+                    </label>
                   </div>
-                  <div className="mt-2 rounded bg-white px-2 py-1.5 text-center text-xs font-bold text-emerald-800">종합 경감계수 = {totalDeratingFactor.toFixed(4)}</div>
+                  <div className="mt-2 grid grid-cols-2 gap-1 text-[10px] text-emerald-900">
+                    <span>온도: {temperatureFactor.toFixed(3)}</span>
+                    <span>고도: {altitudeFactor.toFixed(3)}</span>
+                    <span>기준 버스바: {requiredBusbarArea == null ? "—" : `${requiredBusbarArea} mm²`}</span>
+                    <span>면적 비율: {busbarRatio == null ? "—" : `${busbarRatio.toFixed(1)}%`}</span>
+                    <span className="col-span-2">버스바 계수: {busbarFactor.toFixed(3)} (80~120%는 1.000)</span>
+                  </div>
+                  <div className="mt-2 rounded bg-white px-2 py-1.5 text-center text-xs font-bold text-emerald-800">
+                    최종 경감계수 = {totalDeratingFactor.toFixed(4)}
+                    <div className="mt-0.5 text-[9px] font-normal text-emerald-700">
+                      {temperatureFactor.toFixed(3)} × {altitudeFactor.toFixed(3)} × {busbarFactor.toFixed(3)} × {(Number(coordInputs.comprehensiveFactor)||0.8).toFixed(3)}
+                    </div>
+                  </div>
                 </section>
                 <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                   <h3 className="mb-2 text-xs font-bold text-amber-900">3. 선택차단 기준</h3>
