@@ -288,7 +288,7 @@ export default function App() {
   const notify = (msg, kind = "ok") => {
     setToast({ msg, kind });
     if (notifyTimerRef.current) window.clearTimeout(notifyTimerRef.current);
-    notifyTimerRef.current = window.setTimeout(() => setToast(null), 1500);
+    notifyTimerRef.current = window.setTimeout(() => setToast(null), 2600);
   };
 
   const innerRect = () => ({ x: pad.left, y: pad.top, w: size.w - pad.left - pad.right, h: size.h - pad.top - pad.bottom });
@@ -1716,7 +1716,6 @@ export default function App() {
       if (product.minBreakCurrent != null) setMinBreakInputs(prev => ({ ...prev, [targetSlot]: String(product.minBreakCurrent) }));
       selectSlot(targetSlot);
       notify('Loaded to slot ' + SERIES_NAMES[targetSlot]);
-      setShowLibrary(false);
     } catch { notify('Server error', 'err'); }
   };
 
@@ -2708,11 +2707,14 @@ export default function App() {
 
       {/* Product Library Modal */}
       {showLibrary&&(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={e=>{if(e.target===e.currentTarget)setShowLibrary(false);}}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="relative flex flex-col bg-white rounded-xl shadow-2xl w-[1100px] max-w-[96vw] max-h-[90vh]">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-              <h2 className="text-base font-bold text-gray-900">Product Library</h2>
-              <button onClick={()=>setShowLibrary(false)} className="text-gray-400 hover:text-gray-700 text-xl leading-none font-bold">x</button>
+            <div className="relative z-10 flex flex-none items-center justify-between border-b border-gray-200 bg-white px-4 py-3">
+              <div>
+                <h2 className="text-base font-bold text-gray-900">Product Library</h2>
+                <p className="mt-0.5 text-[10px] text-gray-500">여러 제품을 슬롯에 연속으로 불러온 뒤 × 버튼으로 닫으세요.</p>
+              </div>
+              <button type="button" aria-label="Product Library 닫기" onClick={()=>setShowLibrary(false)} className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-2xl font-bold leading-none text-gray-600 hover:bg-red-100 hover:text-red-700">×</button>
             </div>
             {!serverAvail?(
               <div className="p-10 text-center text-gray-500 text-sm space-y-3">
@@ -3091,7 +3093,13 @@ export default function App() {
         </div>
       )}
 
-      {toast&&<div className="fixed bottom-6 right-6 rounded-xl bg-gray-900 px-5 py-3 text-lg text-white shadow-lg">{toast.msg}</div>}
+      {toast&&(
+        <div className={`pointer-events-none fixed left-1/2 top-5 z-[100] max-w-[90vw] -translate-x-1/2 rounded-xl border px-6 py-3 text-center text-sm font-bold shadow-2xl ${
+          toast.kind==="err" ? "border-red-300 bg-red-600 text-white" : "border-emerald-300 bg-emerald-600 text-white"
+        }`}>
+          {toast.msg}
+        </div>
+      )}
     </div>
   );
 }
