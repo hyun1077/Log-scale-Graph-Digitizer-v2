@@ -16,7 +16,19 @@ const BG_DEFAULT_OPACITY = Array.from({ length: MAX_BG }, (_, i) => i === 0 ? 1 
 const seriesColor = (i: number) => SERIES_COLORS[i] ?? `hsl(${(i * 67) % 360} 70% 45%)`;
 
 type Pt = { x: number; y: number };
-type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean; tolerancePercent?: 0 | 10 | 15; basePoints?: Pt[]; shiftMultiplier?: number };
+type ProductSpecs = {
+  ratedCurrent: string; ratedVoltage: string; breakingCapacity: string;
+  minBreaking: string; maxBreaking: string; timeConstant: string;
+  protectionType: string; preArcing: string; clearing: string;
+  dimensions: string; weight: string;
+};
+const EMPTY_PRODUCT_SPECS: ProductSpecs = {
+  ratedCurrent:"", ratedVoltage:"", breakingCapacity:"",
+  minBreaking:"", maxBreaking:"", timeConstant:"",
+  protectionType:"", preArcing:"", clearing:"",
+  dimensions:"", weight:"",
+};
+type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean; tolerancePercent?: 0 | 10 | 15; specs?: Partial<ProductSpecs>; basePoints?: Pt[]; shiftMultiplier?: number };
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
@@ -1422,6 +1434,15 @@ export default function App() {
     };
   };
 
+  const setActiveProductSpec = (key: keyof ProductSpecs, value: string) => {
+    updateState(prev => ({
+      ...prev,
+      series: prev.series.map((series, index) => index === activeSeries
+        ? { ...series, specs: { ...EMPTY_PRODUCT_SPECS, ...(series.specs ?? {}), [key]: value } }
+        : series),
+    }));
+  };
+
   const fetchLibrary = async () => {
     try {
       const res = await fetch('/api/products', { signal: AbortSignal.timeout(2000) });
@@ -1436,8 +1457,13 @@ export default function App() {
     if (!s) { notify("저장할 제품 곡선을 선택하세요", "err"); return; }
     const company = saveFormCompany.trim();
     const productName = s.name || BG_LABELS[slot] || `Product ${slot + 1}`;
+    const specs = { ...EMPTY_PRODUCT_SPECS, ...(s.specs ?? {}) };
+    if (!specs.ratedCurrent.trim() || !specs.ratedVoltage.trim()) {
+      notify("정격 전류와 정격 전압은 필수입니다.", "err");
+      return;
+    }
     const overwritesExisting = libraryItems.some(item =>
-      item.company === company && item.name === productName && Number(item.sourceSlot ?? 0) === slot
+      item.company === company && item.name === productName
     );
     if (overwritesExisting && !loggedInUser) {
       notify("기존 제품을 덮어쓰려면 로그인하세요.", "err");
@@ -1469,11 +1495,13 @@ export default function App() {
       seriesColor: s?.color ?? SERIES_COLORS[slot] ?? '#64748B',
       points: s?.points ?? [],
       minBreakCurrent: minBreakCurrents[slot] ?? null,
+      specs,
     };
     try {
       const res = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json', ...adminHeaders() }, body: JSON.stringify(payload) });
       if (res.ok) { notify('Saved!'); fetchLibrary(); }
       else if (res.status === 401) notify('덮어쓰려면 로그인하세요.', 'err');
+      else if (res.status === 400) notify('정격 전류와 정격 전압은 필수입니다.', 'err');
       else notify('Save failed', 'err');
     } catch { notify('Server error', 'err'); }
   };
@@ -1494,6 +1522,7 @@ export default function App() {
       const res = await fetch('/api/products/' + itemId);
       if (!res.ok) { notify('Load failed', 'err'); return; }
       const product = await res.json();
+      setSaveFormCompany(product.company ?? "");
       const imageSettings = product.imageSettings ?? {};
       let restoredXform = imageSettings.bgXform ?? product.bgXform ?? null;
       let restoredAnchor = imageSettings.customAnchor ?? product.customAnchor ?? null;
@@ -1587,7 +1616,7 @@ export default function App() {
         if (targetSlot < MAX_BG) newAnchors[targetSlot] = restoredAnchor;
         const newSeries = [...prev.series];
         while (newSeries.length <= targetSlot) newSeries.push({ name: SERIES_NAMES[newSeries.length] ?? `S${newSeries.length+1}`, color: seriesColor(newSeries.length), points: [], visible: true, crossLines: true });
-        newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? seriesColor(targetSlot), points: product.points ?? [], visible: true, crossLines: true, tolerancePercent: [10,15].includes(Number(imageSettings.tolerancePercent)) ? Number(imageSettings.tolerancePercent) : 0 };
+        newSeries[targetSlot] = { name: product.seriesName ?? SERIES_NAMES[targetSlot], color: product.seriesColor ?? seriesColor(targetSlot), points: product.points ?? [], visible: true, crossLines: true, tolerancePercent: [10,15].includes(Number(imageSettings.tolerancePercent)) ? Number(imageSettings.tolerancePercent) : 0, specs: { ...EMPTY_PRODUCT_SPECS, ...(product.specs ?? {}) } };
         return { ...prev, bgXform: newBgXform, customAnchors: newAnchors, series: newSeries };
       });
       setMinBreakCurrents(prev => { const n = [...prev]; while (n.length <= targetSlot) n.push(null); n[targetSlot] = product.minBreakCurrent ?? null; return n; });
@@ -1663,7 +1692,7 @@ export default function App() {
   const applyPreset = p => {
     try {
       const rawSeries=(p.series??currentState.series).slice(0,MAX_SERIES);
-      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i]??`S${i+1}`,color:s.color??seriesColor(i),points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)})),basePoints:Array.isArray(s.basePoints)?s.basePoints.map(pt=>({x:Number(pt.x),y:Number(pt.y)})):undefined,shiftMultiplier:isFinite(Number(s.shiftMultiplier))?Number(s.shiftMultiplier):undefined,visible:s.visible!==false,crossLines:s.crossLines!==false,tolerancePercent:[10,15].includes(Number(s.tolerancePercent))?Number(s.tolerancePercent):0}));
+      const nextSeries=rawSeries.map((s,i)=>({name:s.name??SERIES_NAMES[i]??`S${i+1}`,color:s.color??seriesColor(i),points:(s.points??[]).map(pt=>({x:Number(pt.x),y:Number(pt.y)})),basePoints:Array.isArray(s.basePoints)?s.basePoints.map(pt=>({x:Number(pt.x),y:Number(pt.y)})):undefined,shiftMultiplier:isFinite(Number(s.shiftMultiplier))?Number(s.shiftMultiplier):undefined,visible:s.visible!==false,crossLines:s.crossLines!==false,tolerancePercent:[10,15].includes(Number(s.tolerancePercent))?Number(s.tolerancePercent):0,specs:{...EMPTY_PRODUCT_SPECS,...(s.specs??{})}}));
       const rawXform=Array.isArray(p.bg?.xform)?p.bg.xform:[];
       const rawAnchors=Array.isArray(p.bg?.customAnchors)?p.bg.customAnchors:[];
       const bgXform=Array(MAX_BG).fill(null).map((_,i)=>rawXform[i]??currentState.bgXform[i]??{sx:1,sy:1,offX:0,offY:0});
@@ -2442,7 +2471,7 @@ export default function App() {
       {/* Product Library Modal */}
       {showLibrary&&(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={e=>{if(e.target===e.currentTarget)setShowLibrary(false);}}>
-          <div className="relative flex flex-col bg-white rounded-xl shadow-2xl w-[780px] max-h-[85vh]">
+          <div className="relative flex flex-col bg-white rounded-xl shadow-2xl w-[1100px] max-w-[96vw] max-h-[90vh]">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
               <h2 className="text-base font-bold text-gray-900">Product Library</h2>
               <button onClick={()=>setShowLibrary(false)} className="text-gray-400 hover:text-gray-700 text-xl leading-none font-bold">x</button>
@@ -2458,11 +2487,43 @@ export default function App() {
             ):(
               <div className="flex flex-1 overflow-hidden min-h-0">
                 {/* Save panel */}
-                <div className="w-56 flex-shrink-0 border-r border-gray-200 p-3 flex flex-col gap-2 text-xs">
+                <div className="w-[360px] flex-shrink-0 overflow-y-auto border-r border-gray-200 p-3 flex flex-col gap-2 text-xs">
                   <p className="font-semibold text-gray-700 text-[11px] uppercase tracking-wide">Save Product</p>
                   <button onClick={()=>productFileRef.current?.click()} className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">제품 JSON 업로드</button>
                   <input ref={productFileRef} type="file" accept="application/json,.json" hidden onChange={e=>{uploadProductFile(e.target.files?.[0]);e.target.value="";}}/>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Company" value={saveFormCompany} onChange={e=>setSaveFormCompany(e.target.value)}/>
+                  <details open className="rounded border border-indigo-200 bg-indigo-50 p-2">
+                    <summary className="cursor-pointer text-[11px] font-bold text-indigo-900">제품 사양 · 검색 데이터</summary>
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      {([
+                        ["ratedCurrent","정격 전류 *","예: 1000 A"],
+                        ["ratedVoltage","정격 전압 *","예: 690 V"],
+                        ["minBreaking","최소 Breaking","예: 3 kA"],
+                        ["maxBreaking","최대 Breaking","예: 100 kA"],
+                        ["timeConstant","시간상수","예: 15 ms"],
+                        ["protectionType","보호 유형","예: aR / gG"],
+                        ["preArcing","Pre-arcing","예: 250 kA²s"],
+                        ["clearing","Clearing","예: 480 kA²s"],
+                        ["dimensions","제품 크기","예: 80×80×150 mm"],
+                        ["weight","중량","예: 1.2 kg"],
+                      ] as [keyof ProductSpecs,string,string][]).map(([key,label,placeholder])=>(
+                        <label key={key} className="flex flex-col gap-0.5 text-[10px] text-indigo-900">
+                          <span>{label}</span>
+                          <input className="rounded border border-indigo-200 bg-white px-1.5 py-1 text-[10px]"
+                            placeholder={placeholder}
+                            value={currentState.series[activeSeries]?.specs?.[key]??""}
+                            onChange={e=>setActiveProductSpec(key,e.target.value)}/>
+                        </label>
+                      ))}
+                      <label className="col-span-2 flex flex-col gap-0.5 text-[10px] text-indigo-900">
+                        <span>Breaking capacity · 한 줄에 하나씩</span>
+                        <textarea className="min-h-16 rounded border border-indigo-200 bg-white px-1.5 py-1 text-[10px]"
+                          placeholder={"예: 50 kA @ 690 V\n80 kA @ 500 V"}
+                          value={currentState.series[activeSeries]?.specs?.breakingCapacity??""}
+                          onChange={e=>setActiveProductSpec("breakingCapacity",e.target.value)}/>
+                      </label>
+                    </div>
+                  </details>
                   <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs">제품명: <strong>{currentState.series[activeSeries]?.name ?? "선택 없음"}</strong> (선택 곡선명 자동 사용)</div>
                   <p className="text-[10px] text-gray-400">이미지 슬롯(A–E)별로 곡선·배경이 함께 저장됩니다. 같은 회사·제품명은 슬롯마다 따로 보관됩니다.</p>
                   <button onClick={()=>saveToLibrary(activeSeries)}
@@ -2494,7 +2555,8 @@ export default function App() {
                     const filtered=libraryItems.filter(p=>{
                       const savedBy=String(p.savedBy??"legacy");
                       const matchesUser=libUserFilter==="all"||savedBy===libUserFilter;
-                      const matchesText=!q||String(p.company??"").toLocaleLowerCase().includes(q)||String(p.name??"").toLocaleLowerCase().includes(q)||savedBy.toLocaleLowerCase().includes(q);
+                      const searchable=[p.company,p.name,savedBy,...Object.values(p.specs??{})].join(" ").toLocaleLowerCase();
+                      const matchesText=!q||searchable.includes(q);
                       return matchesUser&&matchesText;
                     });
                     const companies=[...new Set(filtered.map(p=>p.company))].sort();
@@ -2509,6 +2571,13 @@ export default function App() {
                               <div className="w-3 h-3 rounded-full flex-shrink-0" style={{background:p.seriesColor??'#888'}}/>
                               <div className="flex-1 min-w-0">
                                 <div className="font-semibold truncate">{p.name}</div>
+                                {(p.specs?.ratedCurrent||p.specs?.ratedVoltage||p.specs?.protectionType)&&(
+                                  <div className="mt-0.5 flex flex-wrap gap-1 text-[10px]">
+                                    {p.specs?.ratedCurrent&&<span className="rounded bg-blue-50 px-1 text-blue-700">I {p.specs.ratedCurrent}</span>}
+                                    {p.specs?.ratedVoltage&&<span className="rounded bg-emerald-50 px-1 text-emerald-700">V {p.specs.ratedVoltage}</span>}
+                                    {p.specs?.protectionType&&<span className="rounded bg-amber-50 px-1 text-amber-700">{p.specs.protectionType}</span>}
+                                  </div>
+                                )}
                                 <div className="text-[10px] text-gray-400 flex flex-wrap gap-x-2 gap-y-0.5">
                                   <span>{new Date(p.savedAt).toLocaleDateString('ko-KR')}</span>
                                   <span className="rounded bg-indigo-50 px-1 text-indigo-600">ID: {p.savedBy??"legacy"}</span>

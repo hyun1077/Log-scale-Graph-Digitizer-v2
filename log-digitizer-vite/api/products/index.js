@@ -28,6 +28,7 @@ async function ensureTable(sql) {
       bg_xform      JSONB,
       custom_anchor JSONB,
       image_settings JSONB,
+      specs         JSONB,
       min_break_current FLOAT,
       source_slot   INTEGER NOT NULL DEFAULT 0
     )
@@ -35,6 +36,7 @@ async function ensureTable(sql) {
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS source_slot INTEGER NOT NULL DEFAULT 0`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_settings JSONB`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS saved_by TEXT`;
+  await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS specs JSONB`;
 }
 
 function rowToProduct(r, includeImage = false) {
@@ -50,6 +52,7 @@ function rowToProduct(r, includeImage = false) {
     bgXform:          r.bg_xform,
     customAnchor:     r.custom_anchor,
     imageSettings:    r.image_settings,
+    specs:            r.specs ?? {},
     minBreakCurrent:  r.min_break_current,
     sourceSlot:       r.source_slot != null && r.source_slot !== '' ? Number(r.source_slot) : undefined,
     ...(includeImage ? { imageData: r.image_data } : {}),
@@ -70,7 +73,7 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const rows = await sql`
         SELECT id, company, name, saved_at, saved_by, series_name, series_color,
-               points, bg_xform, custom_anchor, image_settings, min_break_current, source_slot
+               points, bg_xform, custom_anchor, image_settings, specs, min_break_current, source_slot
         FROM products ORDER BY saved_at DESC
       `;
       return res.json(rows.map(r => rowToProduct(r, false)));
@@ -84,6 +87,11 @@ export default async function handler(req, res) {
       const bgXformJson = JSON.stringify(b.bgXform ?? {});
       const anchorJson  = b.customAnchor ? JSON.stringify(b.customAnchor) : null;
       const imageSettingsJson = b.imageSettings ? JSON.stringify(b.imageSettings) : null;
+      const specs = b.specs ?? {};
+      if (!String(specs.ratedCurrent ?? '').trim() || !String(specs.ratedVoltage ?? '').trim()) {
+        return res.status(400).json({ error: 'Rated current and rated voltage are required' });
+      }
+      const specsJson = JSON.stringify(specs);
       const rawSlot = Number(b.sourceSlot);
       const savedBy = isAdmin(req) ? 'sinofuse' : 'guest';
       const sourceSlot =
@@ -91,7 +99,8 @@ export default async function handler(req, res) {
 
       const existing = await sql`
         SELECT id FROM products
-        WHERE company = ${b.company} AND name = ${b.name} AND COALESCE(source_slot, 0) = ${sourceSlot}
+        WHERE company = ${b.company} AND name = ${b.name}
+        ORDER BY saved_at DESC
       `;
 
       if (existing.length > 0) {
@@ -107,16 +116,21 @@ export default async function handler(req, res) {
             bg_xform          = ${bgXformJson}::jsonb,
             custom_anchor     = ${anchorJson}::jsonb,
             image_settings    = ${imageSettingsJson}::jsonb,
+            specs             = ${specsJson}::jsonb,
             min_break_current = ${b.minBreakCurrent ?? null},
             source_slot       = ${sourceSlot}
           WHERE id = ${existing[0].id}
+        `;
+        await sql`
+          DELETE FROM products
+          WHERE company = ${b.company} AND name = ${b.name} AND id <> ${existing[0].id}
         `;
         return res.json({ id: existing[0].id });
       } else {
         await sql`
           INSERT INTO products
             (id, company, name, saved_by, series_name, series_color, points,
-             image_data, bg_xform, custom_anchor, image_settings, min_break_current, source_slot)
+             image_data, bg_xform, custom_anchor, image_settings, specs, min_break_current, source_slot)
           VALUES (
             ${id}, ${b.company}, ${b.name}, ${savedBy},
             ${b.seriesName ?? null}, ${b.seriesColor ?? null},
@@ -125,6 +139,7 @@ export default async function handler(req, res) {
             ${bgXformJson}::jsonb,
             ${anchorJson}::jsonb,
             ${imageSettingsJson}::jsonb,
+            ${specsJson}::jsonb,
             ${b.minBreakCurrent ?? null},
             ${sourceSlot}
           )
