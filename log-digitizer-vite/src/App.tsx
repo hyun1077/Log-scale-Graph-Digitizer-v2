@@ -142,6 +142,7 @@ export default function App() {
   /* product library */
   const [showLibrary, setShowLibrary] = useState(false);
   const [libraryItems, setLibraryItems] = useState([]);
+  const [editingProduct, setEditingProduct] = useState(null);
   const [serverAvail, setServerAvail] = useState(false);
   const [saveFormCompany, setSaveFormCompany] = useState('');
   const [libFilter, setLibFilter] = useState('');
@@ -1668,6 +1669,46 @@ export default function App() {
     } catch { notify('Delete failed', 'err'); }
   };
 
+  const beginEditProduct = product => {
+    if (!loggedInUser) return;
+    setEditingProduct({
+      id: product.id,
+      company: product.company ?? "",
+      name: product.name ?? "",
+      specs: { ...EMPTY_PRODUCT_SPECS, ...(product.specs ?? {}) },
+    });
+  };
+
+  const updateEditingSpec = (key: keyof ProductSpecs, value: string) => {
+    setEditingProduct(prev => prev ? ({ ...prev, specs: { ...prev.specs, [key]: value } }) : prev);
+  };
+
+  const saveEditedProduct = async () => {
+    if (!loggedInUser || !editingProduct) return;
+    if (!editingProduct.company.trim() || !editingProduct.name.trim()) {
+      notify("회사명과 제품명을 입력하세요.", "err"); return;
+    }
+    if (!editingProduct.specs.ratedCurrent.trim() || !editingProduct.specs.ratedVoltage.trim()) {
+      notify("정격 전류와 정격 전압은 필수입니다.", "err"); return;
+    }
+    try {
+      const res = await fetch('/api/products/' + editingProduct.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+        body: JSON.stringify({
+          company: editingProduct.company.trim(),
+          name: editingProduct.name.trim(),
+          specs: editingProduct.specs,
+        }),
+      });
+      if (res.status === 409) { notify("같은 회사와 제품명이 이미 있습니다.", "err"); return; }
+      if (!res.ok) throw new Error();
+      notify("제품 정보를 수정했습니다.");
+      setEditingProduct(null);
+      fetchLibrary();
+    } catch { notify("제품 수정에 실패했습니다.", "err"); }
+  };
+
   const downloadProduct = async (itemId) => {
     try {
       const res = await fetch('/api/products/' + itemId);
@@ -2503,6 +2544,49 @@ export default function App() {
                 {/* Save panel */}
                 <div className="w-[360px] flex-shrink-0 overflow-y-auto border-r border-gray-200 p-3 flex flex-col gap-2 text-xs">
                   <p className="font-semibold text-gray-700 text-[11px] uppercase tracking-wide">Save Product</p>
+                  {loggedInUser&&editingProduct&&(
+                    <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-2 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-amber-900">저장 제품 수정</span>
+                        <button className="text-[10px] text-gray-500 hover:text-red-600" onClick={()=>setEditingProduct(null)}>닫기</button>
+                      </div>
+                      <input className="w-full rounded border border-amber-300 bg-white px-2 py-1.5 text-xs"
+                        placeholder="회사명" value={editingProduct.company}
+                        onChange={e=>setEditingProduct(p=>({...p,company:e.target.value}))}/>
+                      <input className="w-full rounded border border-amber-300 bg-white px-2 py-1.5 text-xs font-semibold"
+                        placeholder="제품명" value={editingProduct.name}
+                        onChange={e=>setEditingProduct(p=>({...p,name:e.target.value}))}/>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {([
+                          ["ratedCurrent","정격 전류 *"],
+                          ["ratedVoltage","정격 전압 *"],
+                          ["minBreaking","최소 Breaking"],
+                          ["maxBreaking","최대 Breaking"],
+                          ["timeConstant","시간상수"],
+                          ["protectionType","보호 유형"],
+                          ["preArcing","Pre-arcing"],
+                          ["clearing","Clearing"],
+                          ["dimensions","제품 크기"],
+                          ["weight","중량"],
+                        ] as [keyof ProductSpecs,string][]).map(([key,label])=>(
+                          <label key={key} className="flex flex-col gap-0.5 text-[10px] text-amber-900">
+                            <span>{label}</span>
+                            <input className="rounded border border-amber-200 bg-white px-1.5 py-1 text-[10px]"
+                              value={editingProduct.specs[key]??""}
+                              onChange={e=>updateEditingSpec(key,e.target.value)}/>
+                          </label>
+                        ))}
+                        <label className="col-span-2 flex flex-col gap-0.5 text-[10px] text-amber-900">
+                          <span>Breaking capacity</span>
+                          <textarea className="min-h-16 rounded border border-amber-200 bg-white px-1.5 py-1 text-[10px]"
+                            value={editingProduct.specs.breakingCapacity??""}
+                            onChange={e=>updateEditingSpec("breakingCapacity",e.target.value)}/>
+                        </label>
+                      </div>
+                      <button className="w-full rounded bg-amber-600 py-1.5 text-[11px] font-bold text-white hover:bg-amber-700"
+                        onClick={saveEditedProduct}>수정 내용 저장</button>
+                    </div>
+                  )}
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Company" value={saveFormCompany} onChange={e=>setSaveFormCompany(e.target.value)}/>
                   <details open className="rounded border border-indigo-200 bg-indigo-50 p-2">
                     <summary className="cursor-pointer text-[11px] font-bold text-indigo-900">제품 사양 · 검색 데이터</summary>
@@ -2579,7 +2663,10 @@ export default function App() {
                         <h3 className="font-bold text-gray-600 mb-1.5 text-[10px] uppercase tracking-widest border-b border-gray-100 pb-1">{company}</h3>
                         <div className="space-y-1">
                           {filtered.filter(p=>p.company===company).map(p=>(
-                            <div key={p.id} className="flex items-center gap-2 p-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors">
+                            <div key={p.id}
+                              onClick={()=>beginEditProduct(p)}
+                              title={loggedInUser?"클릭하여 제품 정보 수정":undefined}
+                              className={`flex items-center gap-2 p-2 rounded-lg border transition-colors ${editingProduct?.id===p.id?"border-amber-400 bg-amber-50":loggedInUser?"border-gray-200 hover:bg-indigo-50 cursor-pointer":"border-gray-200 hover:bg-gray-50"}`}>
                               <div className="w-3 h-3 rounded-full flex-shrink-0" style={{background:p.seriesColor??'#888'}}/>
                               <div className="flex-1 min-w-0">
                                 <div className="font-semibold truncate">{p.name}</div>
@@ -2601,16 +2688,16 @@ export default function App() {
                               </div>
                               <div className="flex flex-wrap gap-1 justify-end max-w-[200px]">
                               {Array.from({ length: Math.min(currentState.series.length, MAX_BG) }, (_, slot) => (
-                              <button key={slot} onClick={()=>loadFromLibrary(p.id,slot)} title={'Load to slot '+SERIES_NAMES[slot]}
+                              <button key={slot} onClick={e=>{e.stopPropagation();loadFromLibrary(p.id,slot);}} title={'Load to slot '+SERIES_NAMES[slot]}
                                 className="rounded px-1.5 py-0.5 text-[10px] font-bold hover:opacity-90 flex-shrink-0 border"
                                 style={{background:SERIES_COLORS[slot]+"22",color:SERIES_COLORS[slot],borderColor:SERIES_COLORS[slot]+"88"}}>&#8594;{SERIES_NAMES[slot]}</button>
                               ))}
-                              {currentState.series.length<MAX_SERIES&&<button onClick={()=>loadFromLibrary(p.id,currentState.series.length)} title="Load as a new visible curve"
+                              {currentState.series.length<MAX_SERIES&&<button onClick={e=>{e.stopPropagation();loadFromLibrary(p.id,currentState.series.length);}} title="Load as a new visible curve"
                                 className="rounded px-1.5 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-300">+New</button>}
                               </div>
-                              <button onClick={()=>downloadProduct(p.id)} title="Download product JSON"
+                              <button onClick={e=>{e.stopPropagation();downloadProduct(p.id);}} title="Download product JSON"
                                 className="rounded bg-sky-100 text-sky-700 px-2 py-1 text-[10px] hover:bg-sky-200 flex-shrink-0">JSON</button>
-                              {loggedInUser&&<button onClick={()=>deleteFromLibrary(p.id)} title="Delete"
+                              {loggedInUser&&<button onClick={e=>{e.stopPropagation();deleteFromLibrary(p.id);}} title="Delete"
                                 className="rounded bg-red-100 text-red-600 px-2 py-1 text-[10px] hover:bg-red-200 flex-shrink-0">Del</button>}
                             </div>
                           ))}
