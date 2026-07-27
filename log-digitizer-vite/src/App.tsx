@@ -135,6 +135,7 @@ export default function App() {
   const [serverAvail, setServerAvail] = useState(false);
   const [saveFormCompany, setSaveFormCompany] = useState('');
   const [libFilter, setLibFilter] = useState('');
+  const [libUserFilter, setLibUserFilter] = useState('all');
   const [curveShiftPercent, setCurveShiftPercent] = useState("10");
   const [lastCurveShift, setLastCurveShift] = useState(1.1);
 
@@ -2453,6 +2454,13 @@ export default function App() {
                     선택 제품 저장 ({currentState.series[activeSeries]?.name ?? "-"})
                   </button>
                   <div className="mt-auto border-t border-gray-200 pt-2">
+                    <select className="mb-2 w-full rounded border border-gray-300 bg-white px-2 py-2 text-xs"
+                      value={libUserFilter} onChange={e=>setLibUserFilter(e.target.value)}>
+                      <option value="all">모든 저장 ID</option>
+                      {[...new Set(libraryItems.map(p=>p.savedBy ?? "legacy"))].sort().map(user=>(
+                        <option key={user} value={user}>{user}</option>
+                      ))}
+                    </select>
                     <input className="w-full rounded border-2 border-indigo-300 px-2 py-2 text-xs" placeholder="회사명 또는 제품명 검색..." value={libFilter} onChange={e=>setLibFilter(e.target.value)}/>
                   </div>
                 </div>
@@ -2466,7 +2474,12 @@ export default function App() {
                     </div>
                   ):(()=>{
                     const q=libFilter.trim().toLocaleLowerCase();
-                    const filtered=libraryItems.filter(p=>!q||String(p.company??"").toLocaleLowerCase().includes(q)||String(p.name??"").toLocaleLowerCase().includes(q));
+                    const filtered=libraryItems.filter(p=>{
+                      const savedBy=String(p.savedBy??"legacy");
+                      const matchesUser=libUserFilter==="all"||savedBy===libUserFilter;
+                      const matchesText=!q||String(p.company??"").toLocaleLowerCase().includes(q)||String(p.name??"").toLocaleLowerCase().includes(q)||savedBy.toLocaleLowerCase().includes(q);
+                      return matchesUser&&matchesText;
+                    });
                     const companies=[...new Set(filtered.map(p=>p.company))].sort();
                     return companies.length===0?(
                       <p className="text-gray-400 text-center mt-8">No results</p>
@@ -2481,6 +2494,7 @@ export default function App() {
                                 <div className="font-semibold truncate">{p.name}</div>
                                 <div className="text-[10px] text-gray-400 flex flex-wrap gap-x-2 gap-y-0.5">
                                   <span>{new Date(p.savedAt).toLocaleDateString('ko-KR')}</span>
+                                  <span className="rounded bg-indigo-50 px-1 text-indigo-600">ID: {p.savedBy??"legacy"}</span>
                                   <span>{p.points?.length??0}pts</span>
                                   {p.sourceSlot!=null&&<span>슬롯 {SERIES_NAMES[p.sourceSlot]??p.sourceSlot}</span>}
                                   {p.minBreakCurrent&&<span>min-I:{p.minBreakCurrent}</span>}

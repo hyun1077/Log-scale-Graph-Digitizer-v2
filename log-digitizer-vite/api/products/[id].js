@@ -34,6 +34,7 @@ export default async function handler(req, res) {
         company:          r.company,
         name:             r.name,
         savedAt:          r.saved_at,
+        savedBy:          r.saved_by ?? 'legacy',
         seriesName:       r.series_name,
         seriesColor:      r.series_color,
         points:           r.points ?? [],

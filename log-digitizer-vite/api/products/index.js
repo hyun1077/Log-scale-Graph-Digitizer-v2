@@ -20,6 +20,7 @@ async function ensureTable(sql) {
       company       TEXT NOT NULL,
       name          TEXT NOT NULL,
       saved_at      TIMESTAMPTZ DEFAULT NOW(),
+      saved_by      TEXT,
       series_name   TEXT,
       series_color  TEXT,
       points        JSONB DEFAULT '[]',
@@ -33,6 +34,7 @@ async function ensureTable(sql) {
   `;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS source_slot INTEGER NOT NULL DEFAULT 0`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_settings JSONB`;
+  await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS saved_by TEXT`;
 }
 
 function rowToProduct(r, includeImage = false) {
@@ -41,6 +43,7 @@ function rowToProduct(r, includeImage = false) {
     company:          r.company,
     name:             r.name,
     savedAt:          r.saved_at,
+    savedBy:          r.saved_by ?? 'legacy',
     seriesName:       r.series_name,
     seriesColor:      r.series_color,
     points:           r.points ?? [],
@@ -66,7 +69,7 @@ export default async function handler(req, res) {
     /* GET /api/products — list (no imageData) */
     if (req.method === 'GET') {
       const rows = await sql`
-        SELECT id, company, name, saved_at, series_name, series_color,
+        SELECT id, company, name, saved_at, saved_by, series_name, series_color,
                points, bg_xform, custom_anchor, image_settings, min_break_current, source_slot
         FROM products ORDER BY saved_at DESC
       `;
@@ -82,6 +85,7 @@ export default async function handler(req, res) {
       const anchorJson  = b.customAnchor ? JSON.stringify(b.customAnchor) : null;
       const imageSettingsJson = b.imageSettings ? JSON.stringify(b.imageSettings) : null;
       const rawSlot = Number(b.sourceSlot);
+      const savedBy = isAdmin(req) ? 'sinofuse' : 'guest';
       const sourceSlot =
         Number.isFinite(rawSlot) && rawSlot >= 0 && rawSlot < 20 ? Math.floor(rawSlot) : 0;
 
@@ -95,6 +99,7 @@ export default async function handler(req, res) {
         await sql`
           UPDATE products SET
             saved_at          = NOW(),
+            saved_by          = ${savedBy},
             series_name       = ${b.seriesName ?? null},
             series_color      = ${b.seriesColor ?? null},
             points            = ${pointsJson}::jsonb,
@@ -110,10 +115,10 @@ export default async function handler(req, res) {
       } else {
         await sql`
           INSERT INTO products
-            (id, company, name, series_name, series_color, points,
+            (id, company, name, saved_by, series_name, series_color, points,
              image_data, bg_xform, custom_anchor, image_settings, min_break_current, source_slot)
           VALUES (
-            ${id}, ${b.company}, ${b.name},
+            ${id}, ${b.company}, ${b.name}, ${savedBy},
             ${b.seriesName ?? null}, ${b.seriesColor ?? null},
             ${pointsJson}::jsonb,
             ${b.imageData ?? null},
