@@ -15,7 +15,7 @@ const isAdmin = req => req.headers['x-admin-auth'] === ADMIN_AUTH;
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Auth');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -46,6 +46,38 @@ export default async function handler(req, res) {
         minBreakCurrent:  r.min_break_current,
         sourceSlot:       r.source_slot != null && r.source_slot !== '' ? Number(r.source_slot) : undefined,
       });
+    }
+
+    /* PATCH /api/products/:id — edit product identity and searchable specs */
+    if (req.method === 'PATCH') {
+      if (!isAdmin(req)) return res.status(401).json({ error: 'Login required to edit a product' });
+      const company = String(req.body?.company ?? '').trim();
+      const name = String(req.body?.name ?? '').trim();
+      const specs = req.body?.specs ?? {};
+      if (!company || !name) return res.status(400).json({ error: 'Company and product name are required' });
+      if (!String(specs.ratedCurrent ?? '').trim() || !String(specs.ratedVoltage ?? '').trim()) {
+        return res.status(400).json({ error: 'Rated current and rated voltage are required' });
+      }
+      const duplicate = await sql`
+        SELECT id FROM products
+        WHERE company = ${company} AND name = ${name} AND id <> ${id}
+        LIMIT 1
+      `;
+      if (duplicate.length) return res.status(409).json({ error: 'A product with the same company and name already exists' });
+      const specsJson = JSON.stringify(specs);
+      const rows = await sql`
+        UPDATE products SET
+          company = ${company},
+          name = ${name},
+          series_name = ${name},
+          specs = ${specsJson}::jsonb,
+          saved_by = 'sinofuse',
+          saved_at = NOW()
+        WHERE id = ${id}
+        RETURNING id
+      `;
+      if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      return res.json({ ok: true, id });
     }
 
     /* DELETE /api/products/:id */
