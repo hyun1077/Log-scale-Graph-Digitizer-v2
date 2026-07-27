@@ -1581,7 +1581,7 @@ export default function App() {
     };
     try {
       const res = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json', ...adminHeaders() }, body: JSON.stringify(payload) });
-      if (res.ok) { notify('Saved!'); fetchLibrary(); }
+      if (res.ok) { notify(`Saved slot ${BG_LABELS[slot] ?? slot + 1}! 다음 슬롯을 선택해 계속 저장할 수 있습니다.`); fetchLibrary(); }
       else if (res.status === 401) notify('덮어쓰려면 로그인하세요.', 'err');
       else if (res.status === 400) notify('정격 전류와 정격 전압은 필수입니다.', 'err');
       else notify('Save failed', 'err');
@@ -2772,6 +2772,23 @@ export default function App() {
                         onClick={saveEditedProduct}>수정 내용 저장</button>
                     </div>
                   )}
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-2">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-gray-700">저장할 슬롯 선택</span>
+                      <span className="text-[9px] text-gray-400">저장 후 다음 슬롯을 바로 선택할 수 있습니다.</span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1">
+                      {currentState.series.map((series,index)=>(
+                        <button key={index} type="button" onClick={()=>selectSlot(index)}
+                          className={`rounded border px-1 py-1.5 text-[10px] font-bold transition-colors ${
+                            activeSeries===index ? "border-indigo-600 bg-indigo-600 text-white shadow-sm" : "border-gray-200 bg-white text-gray-700 hover:border-indigo-300 hover:bg-indigo-50"
+                          }`}>
+                          {BG_LABELS[index]??index+1}
+                          <span className={`ml-1 ${activeSeries===index?"text-indigo-100":"text-gray-400"}`}>{series.points?.length??0}p</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Company" value={saveFormCompany} onChange={e=>setSaveFormCompany(e.target.value)}/>
                   <details open className="rounded border border-indigo-200 bg-indigo-50 p-2">
                     <summary className="cursor-pointer text-[11px] font-bold text-indigo-900">제품 사양 · 검색 데이터</summary>
