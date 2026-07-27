@@ -60,7 +60,6 @@ export default function App() {
   const canvasRef  = useRef(null);
   const fileRefs   = useRef(Array(MAX_BG).fill(null));
   const presetFileRef = useRef(null);
-  const productFileRef = useRef(null);
 
   const bgRefs = useRef(Array(MAX_BG).fill(null));
   const bgUrls = useRef(Array(MAX_BG).fill(null));
@@ -2489,8 +2488,6 @@ export default function App() {
                 {/* Save panel */}
                 <div className="w-[360px] flex-shrink-0 overflow-y-auto border-r border-gray-200 p-3 flex flex-col gap-2 text-xs">
                   <p className="font-semibold text-gray-700 text-[11px] uppercase tracking-wide">Save Product</p>
-                  <button onClick={()=>productFileRef.current?.click()} className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">제품 JSON 업로드</button>
-                  <input ref={productFileRef} type="file" accept="application/json,.json" hidden onChange={e=>{uploadProductFile(e.target.files?.[0]);e.target.value="";}}/>
                   <input className="rounded border border-gray-300 px-2 py-1.5 text-xs" placeholder="Company" value={saveFormCompany} onChange={e=>setSaveFormCompany(e.target.value)}/>
                   <details open className="rounded border border-indigo-200 bg-indigo-50 p-2">
                     <summary className="cursor-pointer text-[11px] font-bold text-indigo-900">제품 사양 · 검색 데이터</summary>
