@@ -1212,7 +1212,7 @@ export default function App() {
       ctx.beginPath(); ctx.moveTo(size.w-sz-16+sz/2,16); ctx.lineTo(size.w-sz-16+sz/2,16+sz);
       ctx.moveTo(size.w-sz-16,16+sz/2); ctx.lineTo(size.w-16,16+sz/2); ctx.stroke(); ctx.restore();
     }
-  }, [currentState,activeBg,bgList,showBgs,opacityBgs,keepAspect,anchorMode,pickAnchor,hoverHandle,
+  }, [currentState,activeBg,bgList,showBgs,opacityBgs,keepAspect,anchorMode,pickAnchor,bgEditMode,hoverHandle,
       showPoints,connectLines,lineAlpha,lineWidth,smoothLines,smoothAlpha,ptRadius,
       guideXs,guideYs,showCrossFromX,showCrossFromY,magnifyOn,selectedPoint,tick,minBreakCurrents,
       calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,calPick,selectedCalPoint,showIntersectionMarkers]);
