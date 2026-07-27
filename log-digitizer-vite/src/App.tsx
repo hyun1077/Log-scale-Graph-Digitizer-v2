@@ -1036,14 +1036,20 @@ export default function App() {
     ctx.fillText(currentState.xLog?"X (10^n)":"X", r.x+r.w/2, r.y+r.h+34);
     ctx.save(); ctx.translate(r.x-45,r.y+r.h/2); ctx.rotate(-Math.PI/2); ctx.fillText(currentState.yLog?"Y (10^n)":"Y",0,0); ctx.restore();
 
-    /* snap preview for anchor pick mode */
-    if (pickAnchor && snapPreviewRef.current) {
+    /* snap preview for pivot and calibration point picking */
+    if ((pickAnchor || calPick) && snapPreviewRef.current) {
       const {px:spx,py:spy}=snapPreviewRef.current; const rr=innerRect();
-      ctx.save(); ctx.strokeStyle="#f59e0b"; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+      const previewColor = calPick ? "#0EA5E9" : "#f59e0b";
+      ctx.save(); ctx.strokeStyle=previewColor; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
       ctx.beginPath(); ctx.moveTo(rr.x,spy); ctx.lineTo(rr.x+rr.w,spy); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(spx,rr.y); ctx.lineTo(spx,rr.y+rr.h); ctx.stroke();
-      ctx.setLineDash([]); ctx.fillStyle="#f59e0b";
+      ctx.setLineDash([]); ctx.fillStyle=previewColor;
       ctx.beginPath(); ctx.arc(spx,spy,5,0,Math.PI*2); ctx.fill();
+      if (calPick) {
+        const d = pixelToData(spx, spy);
+        ctx.font="bold 11px ui-sans-serif"; ctx.textAlign="left";
+        ctx.fillText(`${calPick.toUpperCase()}  X=${fmtReal(d.x)}, Y=${fmtReal(d.y)}`, spx+9, spy-9);
+      }
       ctx.restore();
     }
 
@@ -1220,15 +1226,19 @@ export default function App() {
       return;
     }
     setHoverHandle(bgEditMode?pickHandle(px,py):"none");
-    if (pickAnchor) { snapPreviewRef.current = overImage(px,py) ? snapToGrid(px,py) : null; }
+    if (pickAnchor) snapPreviewRef.current = overImage(px,py) ? snapToGrid(px,py) : null;
+    else if (calPick) snapPreviewRef.current = inPlot(px,py) ? snapToGrid(px,py) : null;
+    else snapPreviewRef.current = null;
     setTick(t=>t+1);
   };
   const onMouseDown = e => {
-    const {px,py}=canvasPoint(e); if(e.button===2){setPickAnchor(false);return;}
+    const {px,py}=canvasPoint(e); if(e.button===2){setPickAnchor(false);setCalPick(null);snapPreviewRef.current=null;return;}
     if (calPick && inPlot(px, py)) {
-      setCalPixelsForBg(activeBg, prev => ({ ...prev, [calPick]: { px, py } }));
+      const snapped = snapToGrid(px, py);
+      setCalPixelsForBg(activeBg, prev => ({ ...prev, [calPick]: snapped }));
       setSelectedCalPoint(calPick);
       setCalPick(null);
+      snapPreviewRef.current = null;
       notify(`Calibration ${calPick.toUpperCase()} point set`);
       return;
     }
@@ -1935,7 +1945,7 @@ export default function App() {
                       <label className="flex items-center gap-1">Opacity <input className="w-20" type="range" min={0} max={1} step={0.05} value={opacityBgs[activeBg]} onChange={e=>setOpacityBgs(cur=>{const n=[...cur];n[activeBg]=Number(e.target.value);return n;})}/></label>
                       <label className="col-span-2 flex items-center gap-2"><input type="checkbox" className="h-3 w-3" checked={keepAspect} onChange={e=>setKeepAspect(e.target.checked)}/> Keep Ratio</label>
                       <div className="col-span-2 grid grid-cols-2 gap-2">
-                        <button onClick={()=>setPickAnchor(v=>!v)} className={`rounded bg-gray-200 px-2 py-1 text-xs ${pickAnchor?"bg-orange-100 text-orange-800":""}`}>{pickAnchor?"Click pivot point...":"Set Pivot"}</button>
+                        <button onClick={()=>{setCalPick(null);snapPreviewRef.current=null;setPickAnchor(v=>!v);}} className={`rounded bg-gray-200 px-2 py-1 text-xs ${pickAnchor?"bg-orange-100 text-orange-800":""}`}>{pickAnchor?"Click pivot point...":"Set Pivot"}</button>
                         <button onClick={()=>updateState(prev=>{const n=[...prev.customAnchors];n[activeBg]=null;return{...prev,customAnchors:n};})} className="rounded bg-gray-200 px-2 py-1 text-xs">Clear</button>
                       </div>
                     </div>
@@ -1956,7 +1966,7 @@ export default function App() {
                         {["x1","x2","y1","y2"].map((k) => (
                           <Fragment key={k}>
                             <button
-                              onClick={()=>{ setCalPick(k as CalPickKey); setSelectedCalPoint(k as CalPickKey); notify(`Click ${k.toUpperCase()} point on graph`); }}
+                              onClick={()=>{ setPickAnchor(false); setCalEnabledForBg(activeBg,true); snapPreviewRef.current=null; setCalPick(k as CalPickKey); setSelectedCalPoint(k as CalPickKey); notify(`Click ${k.toUpperCase()} point on graph`); }}
                               className={`rounded px-1.5 py-1 text-[10px] font-semibold ${calPick===k||selectedCalPoint===k?"bg-amber-200 text-amber-900":"bg-white border border-blue-200 text-blue-800"}`}>
                               Pick {k.toUpperCase()}
                             </button>
@@ -1973,6 +1983,13 @@ export default function App() {
                           </Fragment>
                         ))}
                       </div>
+                      {selectedCalPoint && calPixels[selectedCalPoint] && (()=>{
+                        const pt=calPixels[selectedCalPoint];
+                        const data=pixelToData(pt.px,pt.py);
+                        return <div className="mt-1 rounded bg-white px-2 py-1 text-[10px] font-mono text-blue-800">
+                          {selectedCalPoint.toUpperCase()} · canvas ({Math.round(pt.px)}, {Math.round(pt.py)}) · graph ({fmtReal(data.x)}, {fmtReal(data.y)})
+                        </div>;
+                      })()}
                       <button
                         type="button"
                         className="w-full rounded bg-blue-600 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700"
