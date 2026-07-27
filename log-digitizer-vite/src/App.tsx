@@ -197,6 +197,8 @@ export default function App() {
   const [showCoordination, setShowCoordination] = useState(false);
   const [coordUpperId, setCoordUpperId] = useState("");
   const [coordLowerId, setCoordLowerId] = useState("");
+  const [coordUpperSearch, setCoordUpperSearch] = useState("");
+  const [coordLowerSearch, setCoordLowerSearch] = useState("");
   const [coordInputs, setCoordInputs] = useState({
     systemVoltage: "", loadCurrent: "", faultCurrent: "",
     temperatureC: "20", altitudeM: "2000", busbarArea: "", comprehensiveFactor: "0.8",
@@ -2036,9 +2038,31 @@ export default function App() {
     return { product, checks, complete, pass:complete && checks.every(check => check.pass), currentPass:checks[0].pass, ratedCurrent, ratedVoltage, minBreaking, maxBreaking, deratedCurrent };
   };
   const productFitResults = libraryItems.map(evaluateProductFit);
+  const recommendationComparator = (a, b) => {
+    const currentGap = result => requiredRatedCurrent == null || result.ratedCurrent == null ? Number.POSITIVE_INFINITY : Math.max(0, result.ratedCurrent-requiredRatedCurrent);
+    const voltageGap = result => systemVoltageForCheck <= 0 ? 0 : result.ratedVoltage != null && result.ratedVoltage >= systemVoltageForCheck ? result.ratedVoltage-systemVoltageForCheck : Number.POSITIVE_INFINITY;
+    const breakingGap = result => faultCurrentForCheck <= 0 ? 0 : result.maxBreaking != null && result.maxBreaking >= faultCurrentForCheck ? result.maxBreaking-faultCurrentForCheck : Number.POSITIVE_INFINITY;
+    return currentGap(a)-currentGap(b) || voltageGap(a)-voltageGap(b) || breakingGap(a)-breakingGap(b) ||
+      String(a.product.company??"").localeCompare(String(b.product.company??"")) ||
+      String(a.product.name??"").localeCompare(String(b.product.name??""));
+  };
   const currentQualifiedProducts = requiredRatedCurrent == null
-    ? productFitResults
-    : productFitResults.filter(result => result.currentPass);
+    ? productFitResults.slice().sort(recommendationComparator)
+    : productFitResults.filter(result => result.currentPass).sort(recommendationComparator);
+  const recommendedProductIds = new Set(currentQualifiedProducts.map(result => String(result.product.id)));
+  const searchableProducts = [
+    ...currentQualifiedProducts.map(result => result.product),
+    ...libraryItems.filter(product => !recommendedProductIds.has(String(product.id))),
+  ];
+  const searchCoordProducts = query => {
+    const needle=String(query??"").trim().toLowerCase();
+    if(!needle) return searchableProducts.slice(0,8);
+    return searchableProducts.filter(product => {
+      const specs=product.specs??{};
+      return [product.company,product.name,product.id,specs.ratedCurrent,specs.ratedVoltage,specs.breakingCapacity]
+        .some(value=>String(value??"").toLowerCase().includes(needle));
+    }).slice(0,8);
+  };
 
   const interpolateLogTimeAtCurrent = (points, current) => {
     const pts=(points??[]).filter(p=>p.x>0&&p.y>0).slice().sort((a,b)=>a.x-b.x);
@@ -2948,6 +2972,7 @@ export default function App() {
                     <h3 className="text-xs font-bold">필요 정격전류 이상 제품</h3>
                     <span className="text-[10px] text-gray-500">{currentQualifiedProducts.length} / {productFitResults.length}개</span>
                   </div>
+                  <p className="mb-2 text-[9px] text-gray-500">필요 정격전류·전압·Breaking Capacity에 가장 가까운 제품부터 표시합니다.</p>
                   <div className="max-h-44 overflow-y-auto rounded border border-gray-100">
                     {currentQualifiedProducts.length===0&&<div className="p-4 text-center text-[11px] text-gray-400">필요 정격전류 이상으로 저장된 제품이 없습니다.</div>}
                     {currentQualifiedProducts.map(result=>(
@@ -2962,18 +2987,30 @@ export default function App() {
                   </div>
                 </section>
                 <section className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
-                  <h3 className="mb-2 text-xs font-bold text-indigo-900">상위·하위 제품 선택</h3>
+                  <h3 className="mb-2 text-xs font-bold text-indigo-900">상위·하위 제품 검색 및 선택</h3>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <label className="text-[11px] font-semibold text-indigo-900">상위 보호기기 · Pre-arcing
-                      <select className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordUpperId} onChange={e=>setCoordUpperId(e.target.value)}>
-                        <option value="">제품 선택</option>{libraryItems.map(p=><option key={p.id} value={p.id}>{p.company} · {p.name}</option>)}
-                      </select>
-                    </label>
-                    <label className="text-[11px] font-semibold text-indigo-900">하위 보호기기 · Clearing
-                      <select className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordLowerId} onChange={e=>setCoordLowerId(e.target.value)}>
-                        <option value="">제품 선택</option>{libraryItems.map(p=><option key={p.id} value={p.id}>{p.company} · {p.name}</option>)}
-                      </select>
-                    </label>
+                    <div className="text-[11px] font-semibold text-indigo-900">
+                      상위 보호기기 · Pre-arcing
+                      <input type="search" placeholder="회사명, 제품명, 정격 검색" className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordUpperSearch} onChange={e=>setCoordUpperSearch(e.target.value)}/>
+                      <div className="mt-1 max-h-32 overflow-y-auto rounded border border-indigo-100 bg-white">
+                        {searchCoordProducts(coordUpperSearch).map(product=>(
+                          <button key={product.id} type="button" onClick={()=>{setCoordUpperId(String(product.id));setCoordUpperSearch(`${product.company} · ${product.name}`);}} className={`block w-full border-b border-indigo-50 px-2 py-1.5 text-left text-[10px] last:border-b-0 ${String(coordUpperId)===String(product.id)?"bg-indigo-600 font-bold text-white":"hover:bg-indigo-50"}`}>
+                            {product.company} · {product.name} <span className={String(coordUpperId)===String(product.id)?"text-indigo-100":"text-gray-400"}>· {product.specs?.ratedCurrent||"-"} A</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="text-[11px] font-semibold text-indigo-900">
+                      하위 보호기기 · Clearing
+                      <input type="search" placeholder="회사명, 제품명, 정격 검색" className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordLowerSearch} onChange={e=>setCoordLowerSearch(e.target.value)}/>
+                      <div className="mt-1 max-h-32 overflow-y-auto rounded border border-indigo-100 bg-white">
+                        {searchCoordProducts(coordLowerSearch).map(product=>(
+                          <button key={product.id} type="button" onClick={()=>{setCoordLowerId(String(product.id));setCoordLowerSearch(`${product.company} · ${product.name}`);}} className={`block w-full border-b border-indigo-50 px-2 py-1.5 text-left text-[10px] last:border-b-0 ${String(coordLowerId)===String(product.id)?"bg-indigo-600 font-bold text-white":"hover:bg-indigo-50"}`}>
+                            {product.company} · {product.name} <span className={String(coordLowerId)===String(product.id)?"text-indigo-100":"text-gray-400"}>· {product.specs?.ratedCurrent||"-"} A</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </section>
                 <section className={`rounded-lg border-2 p-4 ${coordinationResult.status==="pass"?"border-green-400 bg-green-50":coordinationResult.status==="fail"?"border-red-400 bg-red-50":"border-gray-300 bg-gray-50"}`}>
