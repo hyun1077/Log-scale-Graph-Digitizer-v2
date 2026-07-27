@@ -59,7 +59,6 @@ const AccordionSection = ({ title, children, isOpen, onToggle }) => (
 export default function App() {
   const canvasRef  = useRef(null);
   const fileRefs   = useRef(Array(MAX_BG).fill(null));
-  const presetFileRef = useRef(null);
 
   const bgRefs = useRef(Array(MAX_BG).fill(null));
   const bgUrls = useRef(Array(MAX_BG).fill(null));
@@ -637,6 +636,23 @@ export default function App() {
       const tag = String(e.target?.tagName ?? "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
       if (e.key === "Escape") { setPickAnchor(false); setSelectedPoint(null); setCalPick(null); setSelectedCalPoint(null); }
+      if (e.key === "Delete" && selectedPoint) {
+        e.preventDefault();
+        const { seriesIndex, pointIndex } = selectedPoint;
+        updateState(prev => ({
+          ...prev,
+          series: prev.series.map((s, si) => {
+            if (si !== seriesIndex) return s;
+            const basePoints = s.basePoints?.length === s.points.length
+              ? s.basePoints.filter((_, pi) => pi !== pointIndex)
+              : s.basePoints;
+            return { ...s, points: s.points.filter((_, pi) => pi !== pointIndex), basePoints };
+          }),
+        }));
+        setSelectedPoint(null);
+        notify("선택한 포인트를 삭제했습니다.");
+        return;
+      }
       const arrows = ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"];
       if (!arrows.includes(e.key)) return;
       e.preventDefault();
@@ -1892,16 +1908,10 @@ export default function App() {
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/80 p-4 backdrop-blur-sm">
         <h1 className="text-xl font-bold text-gray-900">Log-scale Graph Digitizer</h1>
         <div className="flex flex-wrap items-center gap-3 text-base">
-          <button onClick={()=>updateState(p=>({...p,series:p.series.map((s,i)=>i===activeSeries?{...s,points:s.points.slice(0,-1)}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300">Undo Last Point</button>
           <button onClick={()=>updateState(p=>({...p,series:p.series.map((s,i)=>i===activeSeries?{...s,points:[]}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active</button>
           <div className="h-6 w-px bg-gray-300"/>
-          <button onClick={handleUndo} disabled={historyIndex<=0} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50">Undo</button>
-          <button onClick={handleRedo} disabled={historyIndex>=history.length-1} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold hover:bg-gray-300 disabled:opacity-50">Redo</button>
-          <div className="h-6 w-px bg-gray-300"/>
-          <button onClick={savePresetFile} className="rounded-lg bg-gray-200 px-4 py-2 hover:bg-gray-300">Save Preset</button>
-          <button onClick={()=>presetFileRef.current?.click()} className="rounded-lg bg-gray-200 px-4 py-2 hover:bg-gray-300">Load Preset</button>
-          <input ref={presetFileRef} type="file" accept="application/json" hidden onChange={e=>{const f=e.target.files?.[0];if(f)loadPresetFromFile(f);e.target.value="";}}/>
-          <button onClick={copyShareURL} className="rounded-lg bg-gray-200 px-4 py-2 hover:bg-gray-300">Copy URL</button>
+          <button onClick={handleUndo} title="Undo" aria-label="Undo" disabled={historyIndex<=0} className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-200 text-2xl font-bold hover:bg-gray-300 disabled:opacity-50">↶</button>
+          <button onClick={handleRedo} title="Redo" aria-label="Redo" disabled={historyIndex>=history.length-1} className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-200 text-2xl font-bold hover:bg-gray-300 disabled:opacity-50">↷</button>
           <div className="h-6 w-px bg-gray-300"/>
           <button onClick={exportCSV} className="rounded-lg bg-gray-200 px-4 py-2 hover:bg-gray-300">Export CSV</button>
           <button onClick={exportPNG} className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700">Export PNG</button>
