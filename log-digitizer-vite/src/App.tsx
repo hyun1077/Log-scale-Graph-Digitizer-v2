@@ -2015,6 +2015,9 @@ export default function App() {
   const comprehensiveFactor = Number(coordInputs.comprehensiveFactor);
   const totalDeratingFactor = temperatureFactor * altitudeFactor * busbarFactor *
     (Number.isFinite(comprehensiveFactor) && comprehensiveFactor > 0 ? comprehensiveFactor : 0.8);
+  const requiredRatedCurrent = loadCurrentForCheck > 0 && totalDeratingFactor > 0
+    ? loadCurrentForCheck / totalDeratingFactor
+    : null;
 
   const evaluateProductFit = product => {
     const specs = product.specs ?? {};
@@ -2024,15 +2027,18 @@ export default function App() {
     const maxBreaking = parseEngineeringValue(specs.maxBreaking) ?? parseLargestEngineeringValue(specs.breakingCapacity);
     const deratedCurrent = ratedCurrent == null ? null : ratedCurrent * totalDeratingFactor;
     const checks = [
-      { key:"current", label:"경감 후 허용전류", pass:deratedCurrent != null && loadCurrentForCheck > 0 ? deratedCurrent >= loadCurrentForCheck : null, value:deratedCurrent },
+      { key:"current", label:"필요 정격전류", pass:ratedCurrent != null && requiredRatedCurrent != null ? ratedCurrent >= requiredRatedCurrent : null, value:ratedCurrent },
       { key:"voltage", label:"정격전압", pass:ratedVoltage != null && systemVoltageForCheck > 0 ? ratedVoltage >= systemVoltageForCheck : null, value:ratedVoltage },
       { key:"minBreaking", label:"최소 Breaking", pass:minBreaking != null && faultCurrentForCheck > 0 ? faultCurrentForCheck >= minBreaking : null, value:minBreaking },
       { key:"maxBreaking", label:"최대 Breaking", pass:maxBreaking != null && faultCurrentForCheck > 0 ? faultCurrentForCheck <= maxBreaking : null, value:maxBreaking },
     ];
     const complete = checks.every(check => check.pass !== null);
-    return { product, checks, complete, pass:complete && checks.every(check => check.pass), ratedCurrent, ratedVoltage, minBreaking, maxBreaking, deratedCurrent };
+    return { product, checks, complete, pass:complete && checks.every(check => check.pass), currentPass:checks[0].pass, ratedCurrent, ratedVoltage, minBreaking, maxBreaking, deratedCurrent };
   };
   const productFitResults = libraryItems.map(evaluateProductFit);
+  const currentQualifiedProducts = requiredRatedCurrent == null
+    ? productFitResults
+    : productFitResults.filter(result => result.currentPass);
 
   const interpolateLogTimeAtCurrent = (points, current) => {
     const pts=(points??[]).filter(p=>p.x>0&&p.y>0).slice().sort((a,b)=>a.x-b.x);
@@ -2887,6 +2893,9 @@ export default function App() {
                       </label>
                     ))}
                   </div>
+                  <p className="mt-1.5 text-[9px] leading-relaxed text-blue-700">
+                    예상 단락전류는 설치 지점의 예상 고장전류입니다. 제품의 Breaking Capacity는 이 값 이상이어야 합니다.
+                  </p>
                 </section>
                 <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
                   <h3 className="mb-2 text-xs font-bold text-emerald-900">2. 경감계수 자동 계산</h3>
@@ -2921,6 +2930,9 @@ export default function App() {
                       {temperatureFactor.toFixed(3)} × {altitudeFactor.toFixed(3)} × {busbarFactor.toFixed(3)} × {(Number(coordInputs.comprehensiveFactor)||0.8).toFixed(3)}
                     </div>
                   </div>
+                  <div className="mt-2 rounded border border-emerald-300 bg-emerald-100 px-2 py-2 text-center text-xs font-bold text-emerald-950">
+                    필요 제품 정격전류 = {requiredRatedCurrent == null ? "부하전류를 입력하세요" : `${loadCurrentForCheck.toLocaleString()} ÷ ${totalDeratingFactor.toFixed(4)} = ${requiredRatedCurrent.toLocaleString(undefined,{maximumFractionDigits:2})} A 이상`}
+                  </div>
                 </section>
                 <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                   <h3 className="mb-2 text-xs font-bold text-amber-900">3. 선택차단 기준</h3>
@@ -2933,15 +2945,17 @@ export default function App() {
               <div className="space-y-3">
                 <section className="rounded-lg border border-gray-200 p-3">
                   <div className="mb-2 flex items-center justify-between">
-                    <h3 className="text-xs font-bold">조건 만족 제품</h3>
-                    <span className="text-[10px] text-gray-500">{productFitResults.filter(r=>r.pass).length} / {productFitResults.length}개 만족</span>
+                    <h3 className="text-xs font-bold">필요 정격전류 이상 제품</h3>
+                    <span className="text-[10px] text-gray-500">{currentQualifiedProducts.length} / {productFitResults.length}개</span>
                   </div>
                   <div className="max-h-44 overflow-y-auto rounded border border-gray-100">
-                    {productFitResults.map(result=>(
+                    {currentQualifiedProducts.length===0&&<div className="p-4 text-center text-[11px] text-gray-400">필요 정격전류 이상으로 저장된 제품이 없습니다.</div>}
+                    {currentQualifiedProducts.map(result=>(
                       <div key={result.product.id} className="flex items-center gap-2 border-b border-gray-100 px-2 py-1.5 text-[10px] last:border-b-0">
                         <span className={`rounded px-1.5 py-0.5 font-bold ${result.pass?"bg-green-100 text-green-700":result.complete?"bg-red-100 text-red-700":"bg-gray-100 text-gray-500"}`}>{result.pass?"PASS":result.complete?"FAIL":"DATA"}</span>
                         <span className="min-w-0 flex-1 truncate font-semibold">{result.product.company} · {result.product.name}</span>
-                        <span className="text-gray-500">경감 I {result.deratedCurrent!=null?result.deratedCurrent.toLocaleString(undefined,{maximumFractionDigits:2}):"-"} A</span>
+                        <span className="text-gray-500">정격 {result.ratedCurrent!=null?result.ratedCurrent.toLocaleString(undefined,{maximumFractionDigits:2}):"-"} A</span>
+                        <span className="text-gray-500">경감 후 {result.deratedCurrent!=null?result.deratedCurrent.toLocaleString(undefined,{maximumFractionDigits:2}):"-"} A</span>
                         <span className="text-gray-500">Breaking {result.minBreaking??"-"}~{result.maxBreaking??"-"} A</span>
                       </div>
                     ))}
