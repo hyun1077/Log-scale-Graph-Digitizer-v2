@@ -29,6 +29,25 @@ const EMPTY_PRODUCT_SPECS: ProductSpecs = {
   dimensions:"", weight:"",
 };
 type Series = { name: string; color: string; points: Pt[]; visible?: boolean; crossLines?: boolean; tolerancePercent?: 0 | 10 | 15; specs?: Partial<ProductSpecs>; basePoints?: Pt[]; shiftMultiplier?: number };
+
+const parseEngineeringValue = (raw: unknown): number | null => {
+  const text = String(raw ?? "").replace(/,/g, "").trim();
+  const match = text.match(/[-+]?\d*\.?\d+(?:e[-+]?\d+)?/i);
+  if (!match) return null;
+  let value = Number(match[0]);
+  if (!Number.isFinite(value)) return null;
+  const lower = text.toLowerCase().replace(/\s/g, "");
+  if (lower.includes("ka²") || lower.includes("ka2")) value *= 1e6;
+  else if (lower.includes("ma²") || lower.includes("ma2")) value *= 1e12;
+  else if (lower.includes("ka") || lower.includes("kv")) value *= 1e3;
+  else if (lower.includes("ma") && !lower.includes("max")) value *= 1e6;
+  return value;
+};
+
+const parseLargestEngineeringValue = (raw: unknown): number | null => {
+  const lines = String(raw ?? "").split(/\r?\n|;/).map(parseEngineeringValue).filter((v): v is number => v != null);
+  return lines.length ? Math.max(...lines) : null;
+};
 type Handle = "none" | "left" | "right" | "top" | "bottom" | "uniform";
 type BgXf = { sx: number; sy: number; offX: number; offY: number };
 type CustomAnchor = { ax: number; ay: number; fx: number; fy: number } | null;
@@ -143,6 +162,14 @@ export default function App() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [libraryItems, setLibraryItems] = useState([]);
   const [editingProduct, setEditingProduct] = useState(null);
+  const [showCoordination, setShowCoordination] = useState(false);
+  const [coordUpperId, setCoordUpperId] = useState("");
+  const [coordLowerId, setCoordLowerId] = useState("");
+  const [coordInputs, setCoordInputs] = useState({
+    systemVoltage: "", loadCurrent: "", faultCurrent: "",
+    temperatureFactor: "1", altitudeFactor: "1", installationFactor: "1", otherFactor: "1",
+    curveTolerance: "10", requiredPassRate: "90",
+  });
   const [serverAvail, setServerAvail] = useState(false);
   const [saveFormCompany, setSaveFormCompany] = useState('');
   const [libFilter, setLibFilter] = useState('');
@@ -1944,6 +1971,95 @@ export default function App() {
   const seriesIntersectionsAll = computeSeriesIntersections();
   const seriesIntersections = showIntersectionMarkers ? seriesIntersectionsAll : [];
 
+  const factorKeys = ["temperatureFactor","altitudeFactor","installationFactor","otherFactor"];
+  const totalDeratingFactor = factorKeys.reduce((acc, key) => {
+    const value = Number(coordInputs[key]);
+    return acc * (Number.isFinite(value) && value > 0 ? value : 1);
+  }, 1);
+  const systemVoltageForCheck = Number(coordInputs.systemVoltage);
+  const loadCurrentForCheck = Number(coordInputs.loadCurrent);
+  const faultCurrentForCheck = Number(coordInputs.faultCurrent);
+
+  const evaluateProductFit = product => {
+    const specs = product.specs ?? {};
+    const ratedCurrent = parseEngineeringValue(specs.ratedCurrent);
+    const ratedVoltage = parseEngineeringValue(specs.ratedVoltage);
+    const minBreaking = parseEngineeringValue(specs.minBreaking);
+    const maxBreaking = parseEngineeringValue(specs.maxBreaking) ?? parseLargestEngineeringValue(specs.breakingCapacity);
+    const deratedCurrent = ratedCurrent == null ? null : ratedCurrent * totalDeratingFactor;
+    const checks = [
+      { key:"current", label:"경감 후 허용전류", pass:deratedCurrent != null && loadCurrentForCheck > 0 ? deratedCurrent >= loadCurrentForCheck : null, value:deratedCurrent },
+      { key:"voltage", label:"정격전압", pass:ratedVoltage != null && systemVoltageForCheck > 0 ? ratedVoltage >= systemVoltageForCheck : null, value:ratedVoltage },
+      { key:"minBreaking", label:"최소 Breaking", pass:minBreaking != null && faultCurrentForCheck > 0 ? faultCurrentForCheck >= minBreaking : null, value:minBreaking },
+      { key:"maxBreaking", label:"최대 Breaking", pass:maxBreaking != null && faultCurrentForCheck > 0 ? faultCurrentForCheck <= maxBreaking : null, value:maxBreaking },
+    ];
+    const complete = checks.every(check => check.pass !== null);
+    return { product, checks, complete, pass:complete && checks.every(check => check.pass), ratedCurrent, ratedVoltage, minBreaking, maxBreaking, deratedCurrent };
+  };
+  const productFitResults = libraryItems.map(evaluateProductFit);
+
+  const interpolateLogTimeAtCurrent = (points, current) => {
+    const pts=(points??[]).filter(p=>p.x>0&&p.y>0).slice().sort((a,b)=>a.x-b.x);
+    if (pts.length<2 || current<pts[0].x || current>pts[pts.length-1].x) return null;
+    const lx=Math.log10(current);
+    for(let i=0;i<pts.length-1;i++){
+      const a=pts[i],b=pts[i+1],lxa=Math.log10(a.x),lxb=Math.log10(b.x);
+      if(lxa<=lx&&lx<=lxb){
+        const ratio=(lx-lxa)/((lxb-lxa)||1e-12);
+        return Math.pow(10,Math.log10(a.y)+ratio*(Math.log10(b.y)-Math.log10(a.y)));
+      }
+    }
+    return null;
+  };
+
+  const evaluateCoordination = () => {
+    const upper=libraryItems.find(p=>String(p.id)===String(coordUpperId));
+    const lower=libraryItems.find(p=>String(p.id)===String(coordLowerId));
+    if(!upper||!lower) return {status:"waiting",message:"상위 제품과 하위 제품을 선택하세요."};
+    if(upper.id===lower.id) return {status:"fail",message:"서로 다른 두 제품을 선택하세요."};
+    const upperFit=evaluateProductFit(upper),lowerFit=evaluateProductFit(lower);
+    const upperPre=parseEngineeringValue(upper.specs?.preArcing);
+    const lowerPre=parseEngineeringValue(lower.specs?.preArcing);
+    const lowerClearing=parseEngineeringValue(lower.specs?.clearing);
+    const scalarPass=upperPre!=null&&lowerClearing!=null ? lowerClearing<upperPre : null;
+
+    let curvePassRate=null,curvePass=null,curveSamples=0;
+    if(upperPre!=null&&lowerPre!=null&&lowerClearing!=null&&lowerPre>0&&lowerClearing>0){
+      const clearingCurrentFactor=Math.sqrt(lowerClearing/lowerPre);
+      const lowerClearingPoints=(lower.points??[]).map(p=>({x:p.x*clearingCurrentFactor,y:p.y}));
+      const upperPts=(upper.points??[]).filter(p=>p.x>0&&p.y>0);
+      const lowerPts=lowerClearingPoints.filter(p=>p.x>0&&p.y>0);
+      if(upperPts.length>=2&&lowerPts.length>=2){
+        const minI=Math.max(Math.min(...upperPts.map(p=>p.x)),Math.min(...lowerPts.map(p=>p.x)));
+        const maxI=Math.min(Math.max(...upperPts.map(p=>p.x)),Math.max(...lowerPts.map(p=>p.x)));
+        if(maxI>minI){
+          const margin=Math.max(0,Math.min(90,Number(coordInputs.curveTolerance)||10))/100;
+          let passed=0;
+          for(let i=0;i<40;i++){
+            const current=Math.pow(10,Math.log10(minI)+(i/39)*(Math.log10(maxI)-Math.log10(minI)));
+            const upperTime=interpolateLogTimeAtCurrent(upperPts,current);
+            const lowerTime=interpolateLogTimeAtCurrent(lowerPts,current);
+            if(upperTime==null||lowerTime==null) continue;
+            curveSamples++;
+            if(lowerTime<=upperTime*(1-margin)) passed++;
+          }
+          if(curveSamples>0){
+            curvePassRate=passed/curveSamples*100;
+            curvePass=curvePassRate>=(Number(coordInputs.requiredPassRate)||90);
+          }
+        }
+      }
+    }
+    const dataComplete=upperFit.complete&&lowerFit.complete&&scalarPass!==null&&curvePass!==null;
+    const pass=dataComplete&&upperFit.pass&&lowerFit.pass&&scalarPass&&curvePass;
+    return {
+      status:dataComplete?(pass?"pass":"fail"):"insufficient",
+      message:dataComplete?(pass?"두 제품의 선택차단 조건을 만족합니다.":"선택차단 조건 중 만족하지 않는 항목이 있습니다."):"판정에 필요한 사양 또는 곡선 데이터가 부족합니다.",
+      upper,lower,upperFit,lowerFit,upperPre,lowerPre,lowerClearing,scalarPass,curvePassRate,curvePass,curveSamples,
+    };
+  };
+  const coordinationResult=evaluateCoordination();
+
   return (
     <div className="min-h-screen bg-gray-100 text-gray-800 font-sans antialiased">
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/80 p-4 backdrop-blur-sm">
@@ -1958,6 +2074,7 @@ export default function App() {
           <button onClick={exportPNG} className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700">Export PNG</button>
           <div className="h-6 w-px bg-gray-300"/>
           <button onClick={()=>{setShowLibrary(true);fetchLibrary();}} className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700">Product Library</button>
+          <button onClick={()=>{setShowCoordination(true);fetchLibrary();}} className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700">Selection Check</button>
           <div className="h-6 w-px bg-gray-300"/>
           {loggedInUser?(
             <div className="flex items-center gap-2">
@@ -2713,6 +2830,109 @@ export default function App() {
       )}
 
       {/* 로그인 모달 */}
+      {showCoordination&&(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3" onClick={e=>{if(e.target===e.currentTarget)setShowCoordination(false);}}>
+          <div className="flex max-h-[94vh] w-[1180px] max-w-[98vw] flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+              <div>
+                <h2 className="text-base font-bold text-gray-900">Derating & Selection Coordination</h2>
+                <p className="text-[10px] text-gray-500">저장 곡선은 Pre-arcing 곡선으로 계산합니다.</p>
+              </div>
+              <button onClick={()=>setShowCoordination(false)} className="text-xl font-bold text-gray-400 hover:text-gray-700">×</button>
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-4 lg:grid-cols-[360px,1fr]">
+              <div className="space-y-3">
+                <section className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                  <h3 className="mb-2 text-xs font-bold text-blue-900">1. 운전 조건</h3>
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    {[["systemVoltage","시스템 전압 (V)"],["loadCurrent","부하 전류 (A)"],["faultCurrent","예상 단락전류 (A)"]].map(([key,label])=>(
+                      <label key={key} className={key==="faultCurrent"?"col-span-2":""}>{label}
+                        <input type="number" className="mt-0.5 w-full rounded border border-blue-200 bg-white px-2 py-1" value={coordInputs[key]} onChange={e=>setCoordInputs(p=>({...p,[key]:e.target.value}))}/>
+                      </label>
+                    ))}
+                  </div>
+                </section>
+                <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                  <h3 className="mb-2 text-xs font-bold text-emerald-900">2. 경감계수</h3>
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    {[["temperatureFactor","온도"],["altitudeFactor","고도"],["installationFactor","설치/환기"],["otherFactor","기타"]].map(([key,label])=>(
+                      <label key={key}>{label}
+                        <input type="number" min="0.01" max="2" step="0.01" className="mt-0.5 w-full rounded border border-emerald-200 bg-white px-2 py-1" value={coordInputs[key]} onChange={e=>setCoordInputs(p=>({...p,[key]:e.target.value}))}/>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-2 rounded bg-white px-2 py-1.5 text-center text-xs font-bold text-emerald-800">종합 경감계수 = {totalDeratingFactor.toFixed(4)}</div>
+                </section>
+                <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <h3 className="mb-2 text-xs font-bold text-amber-900">3. 선택차단 기준</h3>
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <label>곡선 안전여유 (%)<input type="number" min="0" max="90" className="mt-0.5 w-full rounded border border-amber-200 bg-white px-2 py-1" value={coordInputs.curveTolerance} onChange={e=>setCoordInputs(p=>({...p,curveTolerance:e.target.value}))}/></label>
+                    <label>필요 통과율 (%)<input type="number" min="1" max="100" className="mt-0.5 w-full rounded border border-amber-200 bg-white px-2 py-1" value={coordInputs.requiredPassRate} onChange={e=>setCoordInputs(p=>({...p,requiredPassRate:e.target.value}))}/></label>
+                  </div>
+                </section>
+              </div>
+              <div className="space-y-3">
+                <section className="rounded-lg border border-gray-200 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h3 className="text-xs font-bold">조건 만족 제품</h3>
+                    <span className="text-[10px] text-gray-500">{productFitResults.filter(r=>r.pass).length} / {productFitResults.length}개 만족</span>
+                  </div>
+                  <div className="max-h-44 overflow-y-auto rounded border border-gray-100">
+                    {productFitResults.map(result=>(
+                      <div key={result.product.id} className="flex items-center gap-2 border-b border-gray-100 px-2 py-1.5 text-[10px] last:border-b-0">
+                        <span className={`rounded px-1.5 py-0.5 font-bold ${result.pass?"bg-green-100 text-green-700":result.complete?"bg-red-100 text-red-700":"bg-gray-100 text-gray-500"}`}>{result.pass?"PASS":result.complete?"FAIL":"DATA"}</span>
+                        <span className="min-w-0 flex-1 truncate font-semibold">{result.product.company} · {result.product.name}</span>
+                        <span className="text-gray-500">경감 I {result.deratedCurrent!=null?result.deratedCurrent.toLocaleString(undefined,{maximumFractionDigits:2}):"-"} A</span>
+                        <span className="text-gray-500">Breaking {result.minBreaking??"-"}~{result.maxBreaking??"-"} A</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <section className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                  <h3 className="mb-2 text-xs font-bold text-indigo-900">상위·하위 제품 선택</h3>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <label className="text-[11px] font-semibold text-indigo-900">상위 보호기기 · Pre-arcing
+                      <select className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordUpperId} onChange={e=>setCoordUpperId(e.target.value)}>
+                        <option value="">제품 선택</option>{libraryItems.map(p=><option key={p.id} value={p.id}>{p.company} · {p.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-[11px] font-semibold text-indigo-900">하위 보호기기 · Clearing
+                      <select className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordLowerId} onChange={e=>setCoordLowerId(e.target.value)}>
+                        <option value="">제품 선택</option>{libraryItems.map(p=><option key={p.id} value={p.id}>{p.company} · {p.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                </section>
+                <section className={`rounded-lg border-2 p-4 ${coordinationResult.status==="pass"?"border-green-400 bg-green-50":coordinationResult.status==="fail"?"border-red-400 bg-red-50":"border-gray-300 bg-gray-50"}`}>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold">선택차단 판정</h3>
+                    <span className={`rounded px-3 py-1 text-sm font-black ${coordinationResult.status==="pass"?"bg-green-600 text-white":coordinationResult.status==="fail"?"bg-red-600 text-white":"bg-gray-300 text-gray-700"}`}>{coordinationResult.status==="pass"?"PASS":coordinationResult.status==="fail"?"FAIL":"DATA"}</span>
+                  </div>
+                  <p className="mt-1 text-xs">{coordinationResult.message}</p>
+                  {coordinationResult.upper&&coordinationResult.lower&&(
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+                      <div className="rounded bg-white p-2">
+                        <div className="font-bold">I²t 선택성</div>
+                        <div>하위 Clearing: {coordinationResult.lowerClearing??"데이터 없음"}</div>
+                        <div>상위 Pre-arcing: {coordinationResult.upperPre??"데이터 없음"}</div>
+                        <div className={coordinationResult.scalarPass===true?"font-bold text-green-700":coordinationResult.scalarPass===false?"font-bold text-red-700":"text-gray-500"}>{coordinationResult.scalarPass===true?"PASS · Clearing < Pre-arcing":coordinationResult.scalarPass===false?"FAIL · Clearing ≥ Pre-arcing":"DATA · I²t 값 필요"}</div>
+                      </div>
+                      <div className="rounded bg-white p-2">
+                        <div className="font-bold">곡선 선택성</div>
+                        <div>공통 구간 샘플: {coordinationResult.curveSamples??0}</div>
+                        <div>통과율: {coordinationResult.curvePassRate!=null?coordinationResult.curvePassRate.toFixed(1)+"%":"데이터 없음"}</div>
+                        <div className={coordinationResult.curvePass===true?"font-bold text-green-700":coordinationResult.curvePass===false?"font-bold text-red-700":"text-gray-500"}>{coordinationResult.curvePass===true?"PASS":coordinationResult.curvePass===false?"FAIL":"DATA · 두 곡선과 I²t 값 필요"}</div>
+                      </div>
+                    </div>
+                  )}
+                  <p className="mt-3 text-[9px] leading-relaxed text-gray-500">설계 보조 판정입니다. 실제 적용 전 제조사 선택성 표와 시험 조건을 반드시 확인하세요.</p>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showLoginModal&&(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           onClick={e=>{if(e.target===e.currentTarget){setShowLoginModal(false);setLoginError(false);}}}>
