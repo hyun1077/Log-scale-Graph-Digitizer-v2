@@ -227,6 +227,15 @@ export default function App() {
   const [anchorMode] = useState("custom");
   const [pickAnchor, setPickAnchor] = useState(false);
   const [bgEditMode, setBgEditMode] = useState(false);
+  const toggleBgEditMode = () => setBgEditMode(current => {
+    if (current) {
+      setPickAnchor(false);
+      setCalPick(null);
+      setSelectedCalPoint(null);
+      snapPreviewRef.current = null;
+    }
+    return !current;
+  });
   const [hoverHandle, setHoverHandle] = useState("none");
 
   const dragRef   = useRef({ active: false, startX: 0, startY: 0, baseX: 0, baseY: 0 });
@@ -1159,7 +1168,7 @@ export default function App() {
       }
       ctx.restore();
     };
-    if (calEnabled) {
+    if (calEnabled && bgEditMode) {
       if (calPixels.x1 && calPixels.x2 && calPixels.y1 && calPixels.y2) {
         const left = Math.min(calPixels.x1.px, calPixels.x2.px);
         const right = Math.max(calPixels.x1.px, calPixels.x2.px);
@@ -2160,7 +2169,7 @@ export default function App() {
             <div className="flex flex-col gap-2">
               <button onClick={()=>setSidebarCollapsed(false)} className="rounded-lg border px-2 py-2 text-xl">{">"}</button>
               <button onClick={()=>setAxesOpen(v=>!v)} className={`rounded-lg px-2 py-2 text-xl ${axesOpen?"bg-gray-900 text-white":"border"}`}>A</button>
-              <button onClick={()=>setBgEditMode(v=>!v)} className={`rounded-lg px-2 py-2 text-xl ${bgEditMode?"bg-gray-900 text-white":"border"}`}>I</button>
+              <button onClick={toggleBgEditMode} className={`rounded-lg px-2 py-2 text-xl ${bgEditMode?"bg-gray-900 text-white":"border"}`}>I</button>
             </div>
           ):(
             <>
@@ -2179,7 +2188,7 @@ export default function App() {
 
               {/* Image Edit */}
               <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
-                <button onClick={()=>setBgEditMode(v=>!v)} className="flex w-full items-center justify-between p-2 text-left">
+                <button onClick={toggleBgEditMode} className="flex w-full items-center justify-between p-2 text-left">
                   <h3 className="text-sm font-bold text-gray-800">Image Edit</h3>
                   <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${bgEditMode?"bg-orange-100 text-orange-800":"bg-gray-200 text-gray-700"}`}>{bgEditMode?"ON":"OFF"}</span>
                 </button>
