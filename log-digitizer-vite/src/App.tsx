@@ -1245,12 +1245,17 @@ export default function App() {
   const onMouseDown = e => {
     const {px,py}=canvasPoint(e); if(e.button===2){setPickAnchor(false);setCalPick(null);snapPreviewRef.current=null;return;}
     if (calPick && inPlot(px, py)) {
+      const pickedKey = calPick;
       const snapped = snapToGrid(px, py);
-      setCalPixelsForBg(activeBg, prev => ({ ...prev, [calPick]: snapped }));
-      setSelectedCalPoint(calPick);
+      const snappedData = pixelToData(snapped.px, snapped.py);
+      const coordinate = pickedKey.startsWith("x") ? snappedData.x : snappedData.y;
+      const autoValue = Number(coordinate.toPrecision(12)).toString();
+      setCalPixelsForBg(activeBg, prev => ({ ...prev, [pickedKey]: snapped }));
+      setCalValuesForBg(activeBg, prev => ({ ...prev, [pickedKey]: autoValue }));
+      setSelectedCalPoint(pickedKey);
       setCalPick(null);
       snapPreviewRef.current = null;
-      notify(`Calibration ${calPick.toUpperCase()} point set`);
+      notify(`${pickedKey.toUpperCase()} = ${autoValue}`);
       return;
     }
     if (calEnabled) {
