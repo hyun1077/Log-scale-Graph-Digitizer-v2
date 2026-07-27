@@ -93,6 +93,7 @@ export default function App() {
   const [i2tFixedRange, setI2tFixedRange] = useState(true);
 
   useEffect(() => { if (showI2tGraph) setSidebarCollapsed(true); }, [showI2tGraph]);
+  useEffect(() => { if (!loggedInUser) { setShowI2tGraph(false); setSidebarCollapsed(false); } }, [loggedInUser]);
   useEffect(() => {
     const cur = Array.from(selectedLifetimeCycles);
     const valid = cur.filter(c => lifetimeCycles.includes(c));
@@ -1394,6 +1395,22 @@ export default function App() {
   };
 
   /* product library API */
+  const adminHeaders = () => loggedInUser
+    ? { 'X-Admin-Auth': btoa('sinofuse:2023!!') }
+    : {};
+
+  const calibrationReferenceForSlot = slot => {
+    const cp = calPixelsByBg[slot];
+    if (!bgRefs.current[slot] || !cp?.x1 || !cp?.x2 || !cp?.y1 || !cp?.y2) return null;
+    const { dx, dy, dw, dh } = drawRectAndAnchor(slot);
+    if (!(dw > 0) || !(dh > 0)) return null;
+    const relative = pt => ({ u: (pt.px - dx) / dw, v: (pt.py - dy) / dh });
+    return {
+      x1: relative(cp.x1), x2: relative(cp.x2),
+      y1: relative(cp.y1), y2: relative(cp.y2),
+    };
+  };
+
   const fetchLibrary = async () => {
     try {
       const res = await fetch('/api/products', { signal: AbortSignal.timeout(2000) });
@@ -1406,9 +1423,18 @@ export default function App() {
     const s = currentState.series[slot];
     if (!saveFormCompany.trim()) { notify("회사명을 입력하세요", "err"); return; }
     if (!s) { notify("저장할 제품 곡선을 선택하세요", "err"); return; }
+    const company = saveFormCompany.trim();
+    const productName = s.name || BG_LABELS[slot] || `Product ${slot + 1}`;
+    const overwritesExisting = libraryItems.some(item =>
+      item.company === company && item.name === productName && Number(item.sourceSlot ?? 0) === slot
+    );
+    if (overwritesExisting && !loggedInUser) {
+      notify("기존 제품을 덮어쓰려면 로그인하세요.", "err");
+      return;
+    }
     const payload = {
-      company: saveFormCompany.trim(),
-      name: s.name || BG_LABELS[slot] || `Product ${slot + 1}`,
+      company,
+      name: productName,
       sourceSlot: slot,
       imageData: bgUrls.current[slot] ?? null,
       bgXform: currentState.bgXform[slot],
@@ -1424,6 +1450,7 @@ export default function App() {
           clip: !!calClipByBg[slot],
           pixels: calPixelsByBg[slot],
           values: calValuesByBg[slot],
+          reference: calibrationReferenceForSlot(slot),
         },
         tolerancePercent: s.tolerancePercent ?? 0,
       },
@@ -1433,8 +1460,9 @@ export default function App() {
       minBreakCurrent: minBreakCurrents[slot] ?? null,
     };
     try {
-      const res = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const res = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json', ...adminHeaders() }, body: JSON.stringify(payload) });
       if (res.ok) { notify('Saved!'); fetchLibrary(); }
+      else if (res.status === 401) notify('덮어쓰려면 로그인하세요.', 'err');
       else notify('Save failed', 'err');
     } catch { notify('Server error', 'err'); }
   };
@@ -1458,6 +1486,7 @@ export default function App() {
       const imageSettings = product.imageSettings ?? {};
       let restoredXform = imageSettings.bgXform ?? product.bgXform ?? null;
       let restoredAnchor = imageSettings.customAnchor ?? product.customAnchor ?? null;
+      let restoredCalibrationPixels = null;
       if (product.imageData && targetSlot < MAX_BG) {
         const img = new Image(); img.crossOrigin = "anonymous";
         await new Promise((resolve, reject) => {
@@ -1495,6 +1524,50 @@ export default function App() {
             fy: placement.fy,
           };
         }
+
+        const calibration = imageSettings.calibration;
+        let reference = calibration?.reference;
+        if (!reference && placement && calibration?.pixels && placement.dw && placement.dh) {
+          const relative = pt => pt ? ({ u: (pt.px - placement.dx) / placement.dw, v: (pt.py - placement.dy) / placement.dh }) : null;
+          reference = {
+            x1: relative(calibration.pixels.x1), x2: relative(calibration.pixels.x2),
+            y1: relative(calibration.pixels.y1), y2: relative(calibration.pixels.y2),
+          };
+        }
+        const cv = calibration?.values;
+        const refs = reference ? [reference.x1, reference.x2, reference.y1, reference.y2] : [];
+        const vals = cv ? [Number(cv.x1), Number(cv.x2), Number(cv.y1), Number(cv.y2)] : [];
+        if (calibration?.enabled && refs.length === 4 && refs.every(p => p && Number.isFinite(p.u) && Number.isFinite(p.v)) &&
+            vals.length === 4 && vals.every(Number.isFinite) &&
+            (!currentState.xLog || (vals[0] > 0 && vals[1] > 0)) &&
+            (!currentState.yLog || (vals[2] > 0 && vals[3] > 0))) {
+          const plot = innerRect(), mm = tMinMax();
+          const pxAt = value => plot.x + ((tVal(value, currentState.xLog) - mm.xmin) / (mm.xmax - mm.xmin)) * plot.w;
+          const pyAt = value => plot.y + plot.h - ((tVal(value, currentState.yLog) - mm.ymin) / (mm.ymax - mm.ymin)) * plot.h;
+          const px1 = pxAt(vals[0]), px2 = pxAt(vals[1]);
+          const py1 = pyAt(vals[2]), py2 = pyAt(vals[3]);
+          const dw = (px2 - px1) / (reference.x2.u - reference.x1.u);
+          const dh = (py2 - py1) / (reference.y2.v - reference.y1.v);
+          if (Number.isFinite(dw) && Number.isFinite(dh) && dw > 1 && dh > 1) {
+            const dx = px1 - reference.x1.u * dw;
+            const dy = py1 - reference.y1.v * dh;
+            const savedKeepAspect = typeof imageSettings.keepAspect === "boolean" ? imageSettings.keepAspect : keepAspect;
+            let baseW = plot.w, baseH = plot.h;
+            if (savedKeepAspect && img.width > 0 && img.height > 0) {
+              const scale = Math.min(plot.w / img.width, plot.h / img.height);
+              baseW = img.width * scale; baseH = img.height * scale;
+            }
+            const fx = Number.isFinite(placement?.fx) ? placement.fx : 0;
+            const fy = Number.isFinite(placement?.fy) ? placement.fy : 1;
+            restoredXform = { sx: dw / baseW, sy: dh / baseH, offX: 0, offY: 0 };
+            restoredAnchor = { ax: dx + fx * dw, ay: dy + fy * dh, fx, fy };
+            const remap = ref => ({ px: dx + ref.u * dw, py: dy + ref.v * dh });
+            restoredCalibrationPixels = {
+              x1: remap(reference.x1), x2: remap(reference.x2),
+              y1: remap(reference.y1), y2: remap(reference.y2),
+            };
+          }
+        }
       }
       updateState(prev => {
         const newBgXform = [...prev.bgXform];
@@ -1514,7 +1587,7 @@ export default function App() {
         if (calibration) {
           setCalEnabledForBg(targetSlot, !!calibration.enabled);
           setCalClipForBg(targetSlot, !!calibration.clip);
-          setCalPixelsForBg(targetSlot, calibration.pixels ?? {x1:null,x2:null,y1:null,y2:null});
+          setCalPixelsForBg(targetSlot, restoredCalibrationPixels ?? calibration.pixels ?? {x1:null,x2:null,y1:null,y2:null});
           setCalValuesForBg(targetSlot, calibration.values ?? {x1:"",x2:"",y1:"",y2:""});
         }
       }
@@ -1526,8 +1599,11 @@ export default function App() {
   };
 
   const deleteFromLibrary = async (itemId) => {
+    if (!loggedInUser) { notify("삭제하려면 로그인하세요.", "err"); return; }
+    if (!window.confirm("이 저장 제품을 삭제하시겠습니까?")) return;
     try {
-      await fetch('/api/products/' + itemId, { method: 'DELETE' });
+      const res = await fetch('/api/products/' + itemId, { method: 'DELETE', headers: adminHeaders() });
+      if (!res.ok) throw new Error();
       fetchLibrary();
     } catch { notify('Delete failed', 'err'); }
   };
@@ -1552,7 +1628,7 @@ export default function App() {
         const p = JSON.parse(String(fr.result || '{}'));
         const payload = { ...p, company: p.company || 'Imported', name: p.name || file.name.replace(/\.json$/i, '') };
         delete payload.id; delete payload.savedAt;
-        const res = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const res = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json', ...adminHeaders() }, body: JSON.stringify(payload) });
         if (!res.ok) throw new Error();
         notify('제품 업로드 완료'); fetchLibrary();
       } catch { notify('제품 파일 업로드 실패', 'err'); }
@@ -1800,7 +1876,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`grid grid-cols-1 gap-3 p-3 ${sidebarCollapsed?"lg:grid-cols-[60px,1fr]":showI2tGraph?"lg:grid-cols-[280px,1fr,1fr]":"lg:grid-cols-[280px,1fr]"}`}>
+      <main className={`grid grid-cols-1 gap-3 p-3 ${sidebarCollapsed?"lg:grid-cols-[60px,1fr]":(loggedInUser&&showI2tGraph)?"lg:grid-cols-[280px,1fr,1fr]":"lg:grid-cols-[280px,1fr]"}`}>
         {/* Sidebar */}
         <aside className={`flex flex-col gap-2 ${sidebarCollapsed?"items-center":""}`}>
           {sidebarCollapsed?(
@@ -2047,15 +2123,15 @@ export default function App() {
           )}
         </aside>
 
-        <div className={`grid grid-cols-1 gap-3 ${showI2tGraph?"lg:grid-cols-2":"lg:grid-cols-1"} col-span-1`}>
+        <div className={`grid grid-cols-1 gap-3 ${(loggedInUser&&showI2tGraph)?"lg:grid-cols-2":"lg:grid-cols-1"} col-span-1`}>
           {/* Main graph */}
           <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm">
-            <div className="mb-2 flex items-center gap-2">
+            {loggedInUser&&<div className="mb-2 flex items-center gap-2">
               <label className="flex items-center gap-2 text-xs font-semibold">
                 <input type="checkbox" className="h-4 w-4" checked={showI2tGraph} onChange={e=>setShowI2tGraph(e.target.checked)}/>
                 Show I2t Lifetime Graph
               </label>
-            </div>
+            </div>}
             <div className="mb-2 h-4 text-xs text-gray-600">
               {hoverRef.current.x!==null
                 ?<span className="font-mono">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
@@ -2254,7 +2330,7 @@ export default function App() {
           </div>
 
           {/* I2t graph */}
-          {showI2tGraph&&(
+          {loggedInUser&&showI2tGraph&&(
             <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm">
               <div className="mb-2 flex items-center justify-between h-4 text-xs font-semibold text-gray-600">
                 <span>I2t Lifetime Graph</span>
@@ -2422,8 +2498,8 @@ export default function App() {
                               </div>
                               <button onClick={()=>downloadProduct(p.id)} title="Download product JSON"
                                 className="rounded bg-sky-100 text-sky-700 px-2 py-1 text-[10px] hover:bg-sky-200 flex-shrink-0">JSON</button>
-                              <button onClick={()=>deleteFromLibrary(p.id)} title="Delete"
-                                className="rounded bg-red-100 text-red-600 px-2 py-1 text-[10px] hover:bg-red-200 flex-shrink-0">Del</button>
+                              {loggedInUser&&<button onClick={()=>deleteFromLibrary(p.id)} title="Delete"
+                                className="rounded bg-red-100 text-red-600 px-2 py-1 text-[10px] hover:bg-red-200 flex-shrink-0">Del</button>}
                             </div>
                           ))}
                         </div>
