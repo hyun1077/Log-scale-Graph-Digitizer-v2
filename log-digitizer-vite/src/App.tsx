@@ -108,6 +108,38 @@ const AccordionSection = ({ title, children, isOpen, onToggle }) => (
   </div>
 );
 
+const CoordinationCurveChart = ({ upper, lower, upperClearingPoints }) => {
+  const upperPoints=(upperClearingPoints??[]).filter(p=>p.x>0&&p.y>0);
+  const lowerPoints=(lower?.points??[]).filter(p=>p.x>0&&p.y>0);
+  const all=[...upperPoints,...lowerPoints];
+  if(upperPoints.length<2||lowerPoints.length<2) return <div className="rounded border border-dashed border-gray-300 bg-white p-5 text-center text-[10px] text-gray-400">곡선을 표시하려면 두 제품의 곡선과 I²t 데이터가 필요합니다.</div>;
+  const xs=all.map(p=>Math.log10(p.x)),ys=all.map(p=>Math.log10(p.y));
+  let xMin=Math.floor(Math.min(...xs)),xMax=Math.ceil(Math.max(...xs));
+  let yMin=Math.floor(Math.min(...ys)),yMax=Math.ceil(Math.max(...ys));
+  if(xMax===xMin)xMax=xMin+1;if(yMax===yMin)yMax=yMin+1;
+  const W=680,H=280,pad={l:58,r:18,t:22,b:42};
+  const px=x=>pad.l+(Math.log10(x)-xMin)/(xMax-xMin)*(W-pad.l-pad.r);
+  const py=y=>pad.t+(yMax-Math.log10(y))/(yMax-yMin)*(H-pad.t-pad.b);
+  const poly=points=>points.slice().sort((a,b)=>a.x-b.x).map(p=>`${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`).join(" ");
+  return (
+    <div className="rounded border border-gray-200 bg-white p-2">
+      <div className="mb-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-semibold">
+        <span className="text-red-600">━ 상위 Clearing (추정) · {upper?.name}</span>
+        <span className="text-blue-600">━ 하위 Pre-arcing · {lower?.name}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="선택차단 곡선 비교">
+        <rect x={pad.l} y={pad.t} width={W-pad.l-pad.r} height={H-pad.t-pad.b} fill="#fff" stroke="#94A3B8"/>
+        {Array.from({length:xMax-xMin+1},(_,i)=>xMin+i).map(exp=><g key={`x${exp}`}><line x1={px(10**exp)} x2={px(10**exp)} y1={pad.t} y2={H-pad.b} stroke="#CBD5E1"/><text x={px(10**exp)} y={H-pad.b+17} textAnchor="middle" fontSize="10" fill="#64748B">10^{exp}</text></g>)}
+        {Array.from({length:yMax-yMin+1},(_,i)=>yMin+i).map(exp=><g key={`y${exp}`}><line x1={pad.l} x2={W-pad.r} y1={py(10**exp)} y2={py(10**exp)} stroke="#CBD5E1"/><text x={pad.l-7} y={py(10**exp)+3} textAnchor="end" fontSize="10" fill="#64748B">10^{exp}</text></g>)}
+        <polyline points={poly(lowerPoints)} fill="none" stroke="#2563EB" strokeWidth="3"/>
+        <polyline points={poly(upperPoints)} fill="none" stroke="#DC2626" strokeWidth="3" strokeDasharray="8 4"/>
+        <text x={(pad.l+W-pad.r)/2} y={H-7} textAnchor="middle" fontSize="11" fill="#475569">Current (A, log)</text>
+        <text x="13" y={(pad.t+H-pad.b)/2} textAnchor="middle" fontSize="11" fill="#475569" transform={`rotate(-90 13 ${(pad.t+H-pad.b)/2})`}>Time (s, log)</text>
+      </svg>
+    </div>
+  );
+};
+
 export default function App() {
   const canvasRef  = useRef(null);
   const fileRefs   = useRef(Array(MAX_BG).fill(null));
@@ -2123,15 +2155,15 @@ export default function App() {
     const upperFit=evaluateProductFit(upper),lowerFit=evaluateProductFit(lower);
     const upperPre=parseEngineeringValue(upper.specs?.preArcing);
     const lowerPre=parseEngineeringValue(lower.specs?.preArcing);
-    const lowerClearing=parseEngineeringValue(lower.specs?.clearing);
-    const scalarPass=upperPre!=null&&lowerClearing!=null ? lowerClearing<upperPre : null;
+    const upperClearing=parseEngineeringValue(upper.specs?.clearing);
+    const scalarPass=upperClearing!=null&&lowerPre!=null ? upperClearing<lowerPre : null;
 
-    let curvePassRate=null,curvePass=null,curveSamples=0;
-    if(upperPre!=null&&lowerPre!=null&&lowerClearing!=null&&lowerPre>0&&lowerClearing>0){
-      const clearingCurrentFactor=Math.sqrt(lowerClearing/lowerPre);
-      const lowerClearingPoints=(lower.points??[]).map(p=>({x:p.x*clearingCurrentFactor,y:p.y}));
-      const upperPts=(upper.points??[]).filter(p=>p.x>0&&p.y>0);
-      const lowerPts=lowerClearingPoints.filter(p=>p.x>0&&p.y>0);
+    let curvePassRate=null,curvePass=null,curveSamples=0,upperClearingPoints=[];
+    if(upperPre!=null&&lowerPre!=null&&upperClearing!=null&&upperPre>0&&upperClearing>0){
+      const clearingCurrentFactor=Math.sqrt(upperClearing/upperPre);
+      upperClearingPoints=(upper.points??[]).map(p=>({x:p.x*clearingCurrentFactor,y:p.y}));
+      const upperPts=upperClearingPoints.filter(p=>p.x>0&&p.y>0);
+      const lowerPts=(lower.points??[]).filter(p=>p.x>0&&p.y>0);
       if(upperPts.length>=2&&lowerPts.length>=2){
         const minI=Math.max(Math.min(...upperPts.map(p=>p.x)),Math.min(...lowerPts.map(p=>p.x)));
         const maxI=Math.min(Math.max(...upperPts.map(p=>p.x)),Math.max(...lowerPts.map(p=>p.x)));
@@ -2144,7 +2176,7 @@ export default function App() {
             const lowerTime=interpolateLogTimeAtCurrent(lowerPts,current);
             if(upperTime==null||lowerTime==null) continue;
             curveSamples++;
-            if(lowerTime<=upperTime*(1-margin)) passed++;
+            if(upperTime<=lowerTime*(1-margin)) passed++;
           }
           if(curveSamples>0){
             curvePassRate=passed/curveSamples*100;
@@ -2158,7 +2190,7 @@ export default function App() {
     return {
       status:dataComplete?(pass?"pass":"fail"):"insufficient",
       message:dataComplete?(pass?"두 제품의 선택차단 조건을 만족합니다.":"선택차단 조건 중 만족하지 않는 항목이 있습니다."):"판정에 필요한 사양 또는 곡선 데이터가 부족합니다.",
-      upper,lower,upperFit,lowerFit,upperPre,lowerPre,lowerClearing,scalarPass,curvePassRate,curvePass,curveSamples,
+      upper,lower,upperFit,lowerFit,upperPre,lowerPre,upperClearing,upperClearingPoints,scalarPass,curvePassRate,curvePass,curveSamples,
     };
   };
   const coordinationResult=evaluateCoordination();
@@ -3049,7 +3081,7 @@ export default function App() {
                   <h3 className="mb-2 text-xs font-bold text-indigo-900">상위·하위 제품 검색 및 선택</h3>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div className="text-[11px] font-semibold text-indigo-900">
-                      상위 보호기기 · Pre-arcing
+                      상위 보호기기 · Clearing
                       <input type="search" placeholder="회사명, 제품명, 정격 검색" className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordUpperSearch} onChange={e=>setCoordUpperSearch(e.target.value)}/>
                       <div className="mt-1 max-h-32 overflow-y-auto rounded border border-indigo-100 bg-white">
                         {searchCoordProducts(coordUpperSearch).map(product=>(
@@ -3060,7 +3092,7 @@ export default function App() {
                       </div>
                     </div>
                     <div className="text-[11px] font-semibold text-indigo-900">
-                      하위 보호기기 · Clearing
+                      하위 보호기기 · Pre-arcing
                       <input type="search" placeholder="회사명, 제품명, 정격 검색" className="mt-1 w-full rounded border border-indigo-200 bg-white px-2 py-2 text-xs" value={coordLowerSearch} onChange={e=>setCoordLowerSearch(e.target.value)}/>
                       <div className="mt-1 max-h-32 overflow-y-auto rounded border border-indigo-100 bg-white">
                         {searchCoordProducts(coordLowerSearch).map(product=>(
@@ -3079,19 +3111,22 @@ export default function App() {
                   </div>
                   <p className="mt-1 text-xs">{coordinationResult.message}</p>
                   {coordinationResult.upper&&coordinationResult.lower&&(
-                    <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
-                      <div className="rounded bg-white p-2">
-                        <div className="font-bold">I²t 선택성</div>
-                        <div>하위 Clearing: {coordinationResult.lowerClearing??"데이터 없음"}</div>
-                        <div>상위 Pre-arcing: {coordinationResult.upperPre??"데이터 없음"}</div>
-                        <div className={coordinationResult.scalarPass===true?"font-bold text-green-700":coordinationResult.scalarPass===false?"font-bold text-red-700":"text-gray-500"}>{coordinationResult.scalarPass===true?"PASS · Clearing < Pre-arcing":coordinationResult.scalarPass===false?"FAIL · Clearing ≥ Pre-arcing":"DATA · I²t 값 필요"}</div>
+                    <div className="mt-3 space-y-2">
+                      <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+                        <div className="rounded bg-white p-2">
+                          <div className="font-bold">I²t 선택성</div>
+                          <div>상위 Clearing: {coordinationResult.upperClearing??"데이터 없음"}</div>
+                          <div>하위 Pre-arcing: {coordinationResult.lowerPre??"데이터 없음"}</div>
+                          <div className={coordinationResult.scalarPass===true?"font-bold text-green-700":coordinationResult.scalarPass===false?"font-bold text-red-700":"text-gray-500"}>{coordinationResult.scalarPass===true?"PASS · 상위 Clearing < 하위 Pre-arcing":coordinationResult.scalarPass===false?"FAIL · 상위 Clearing ≥ 하위 Pre-arcing":"DATA · I²t 값 필요"}</div>
+                        </div>
+                        <div className="rounded bg-white p-2">
+                          <div className="font-bold">곡선 선택성</div>
+                          <div>공통 구간 샘플: {coordinationResult.curveSamples??0}</div>
+                          <div>통과율: {coordinationResult.curvePassRate!=null?coordinationResult.curvePassRate.toFixed(1)+"%":"데이터 없음"}</div>
+                          <div className={coordinationResult.curvePass===true?"font-bold text-green-700":coordinationResult.curvePass===false?"font-bold text-red-700":"text-gray-500"}>{coordinationResult.curvePass===true?"PASS":coordinationResult.curvePass===false?"FAIL":"DATA · 두 곡선과 I²t 값 필요"}</div>
+                        </div>
                       </div>
-                      <div className="rounded bg-white p-2">
-                        <div className="font-bold">곡선 선택성</div>
-                        <div>공통 구간 샘플: {coordinationResult.curveSamples??0}</div>
-                        <div>통과율: {coordinationResult.curvePassRate!=null?coordinationResult.curvePassRate.toFixed(1)+"%":"데이터 없음"}</div>
-                        <div className={coordinationResult.curvePass===true?"font-bold text-green-700":coordinationResult.curvePass===false?"font-bold text-red-700":"text-gray-500"}>{coordinationResult.curvePass===true?"PASS":coordinationResult.curvePass===false?"FAIL":"DATA · 두 곡선과 I²t 값 필요"}</div>
-                      </div>
+                      <CoordinationCurveChart upper={coordinationResult.upper} lower={coordinationResult.lower} upperClearingPoints={coordinationResult.upperClearingPoints}/>
                     </div>
                   )}
                   <p className="mt-3 text-[9px] leading-relaxed text-gray-500">설계 보조 판정입니다. 실제 적용 전 제조사 선택성 표와 시험 조건을 반드시 확인하세요.</p>
