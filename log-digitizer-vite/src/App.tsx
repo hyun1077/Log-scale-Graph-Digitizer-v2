@@ -163,17 +163,11 @@ export default function App() {
 
   const [activeSeries, setActiveSeries] = useState(0);
   const [selectedPoint, setSelectedPoint] = useState(null);
-  const [autoShowLoadedImages, setAutoShowLoadedImages] = useState(() => {
-    try { return localStorage.getItem("digitizer:autoShowLoadedImages") === "true"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("digitizer:autoShowLoadedImages", String(autoShowLoadedImages)); } catch {}
-  }, [autoShowLoadedImages]);
   const selectSlot = (i: number) => {
     setActiveSeries(i);
     if (i < MAX_BG) {
       setActiveBg(i);
-      if (autoShowLoadedImages) setShowBgs(prev => prev.map((_, j) => j === i));
+      setShowBgs(prev => prev.map((_, j) => j === i));
     }
     setSelectedPoint(null);
   };
@@ -216,14 +210,6 @@ export default function App() {
   const [libUserFilter, setLibUserFilter] = useState('all');
   const [curveShiftPercent, setCurveShiftPercent] = useState("10");
   const [lastCurveShift, setLastCurveShift] = useState(1.1);
-
-  useEffect(() => {
-    if (!loggedInUser) {
-      setShowLibrary(false);
-      setShowCoordination(false);
-      setLibraryItems([]);
-    }
-  }, [loggedInUser]);
 
   const [magnifyOn, setMagnifyOn] = useState(true);
   const [magnifyFactor] = useState(3);
@@ -591,29 +577,6 @@ export default function App() {
     fr.readAsDataURL(file);
   };
 
-  const deleteImageFromSlot = idx => {
-    if (!bgRefs.current[idx] && !bgUrls.current[idx]) { notify(`슬롯 ${BG_LABELS[idx]}에 삭제할 이미지가 없습니다.`, "err"); return; }
-    if (!window.confirm(`슬롯 ${BG_LABELS[idx]}의 이미지를 삭제하시겠습니까?\n곡선 데이터는 유지됩니다.`)) return;
-    const oldUrl = bgUrls.current[idx];
-    if (typeof oldUrl === "string" && oldUrl.startsWith("blob:")) URL.revokeObjectURL(oldUrl);
-    bgRefs.current[idx] = null;
-    bgUrls.current[idx] = null;
-    setBgList(cur => { const n=[...cur]; n[idx]=null; return n; });
-    setShowBgs(cur => { const n=[...cur]; n[idx]=false; return n; });
-    setOpacityBgs(cur => { const n=[...cur]; n[idx]=BG_DEFAULT_OPACITY[idx]??1; return n; });
-    setCalEnabledForBg(idx,false);
-    setCalClipForBg(idx,false);
-    setCalPixelsForBg(idx,{x1:null,x2:null,y1:null,y2:null});
-    setCalValuesForBg(idx,{x1:"",x2:"",y1:"",y2:""});
-    updateState(prev => {
-      const bgXform=[...prev.bgXform], customAnchors=[...prev.customAnchors];
-      bgXform[idx]={sx:1,sy:1,offX:0,offY:0};
-      customAnchors[idx]=null;
-      return {...prev,bgXform,customAnchors};
-    });
-    notify(`슬롯 ${BG_LABELS[idx]} 이미지를 삭제했습니다. 곡선은 유지됩니다.`);
-  };
-
   /** 화면/창/탭 공유(getDisplayMedia)로 한 장 캡처 후 현재 이미지 슬롯에 넣기 */
   const captureScreenToSlot = async idx => {
     if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -774,8 +737,6 @@ export default function App() {
         if (e.key === "ArrowUp") ny -= step;   if (e.key === "ArrowDown") ny += step;
         const nd = pixelToData(nx, ny);
         updateState(prev => ({ ...prev, series: prev.series.map((s, si) => si !== seriesIndex ? s : { ...s, points: s.points.map((p, pi) => pi === pointIndex ? nd : p) }) }));
-        hoverRef.current = { x: nd.x, y: nd.y };
-        setTick(t => t + 1);
         return;
       }
       if (selectedCalPoint) {
@@ -1574,21 +1535,14 @@ export default function App() {
   };
 
   const fetchLibrary = async () => {
-    if (!loggedInUser) {
-      setLibraryItems([]);
-      setServerAvail(false);
-      notify("데이터베이스는 로그인 후 사용할 수 있습니다.", "err");
-      return;
-    }
     try {
-      const res = await fetch('/api/products', { headers: adminHeaders(), signal: AbortSignal.timeout(2000) });
+      const res = await fetch('/api/products', { signal: AbortSignal.timeout(2000) });
       if (res.ok) { setLibraryItems(await res.json()); setServerAvail(true); }
       else setServerAvail(false);
     } catch { setServerAvail(false); }
   };
 
   const saveToLibrary = async (slot) => {
-    if (!loggedInUser) { notify("데이터베이스 저장은 로그인 후 사용할 수 있습니다.", "err"); return; }
     const s = currentState.series[slot];
     if (!saveFormCompany.trim()) { notify("회사명을 입력하세요", "err"); return; }
     if (!s) { notify("저장할 제품 곡선을 선택하세요", "err"); return; }
@@ -1644,7 +1598,6 @@ export default function App() {
   };
 
   const loadFromLibrary = async (itemId, targetSlot) => {
-    if (!loggedInUser) { notify("데이터베이스 불러오기는 로그인 후 사용할 수 있습니다.", "err"); return; }
     const existingSeries = currentState.series[targetSlot];
     if (existingSeries?.points?.length > 0) {
       const slotLabel = BG_LABELS[targetSlot] ?? `S${targetSlot + 1}`;
@@ -1657,7 +1610,7 @@ export default function App() {
       }
     }
     try {
-      const res = await fetch('/api/products/' + itemId, { headers: adminHeaders() });
+      const res = await fetch('/api/products/' + itemId);
       if (!res.ok) { notify('Load failed', 'err'); return; }
       const product = await res.json();
       setSaveFormCompany(product.company ?? "");
@@ -1675,7 +1628,7 @@ export default function App() {
         bgRefs.current[targetSlot] = img;
         bgUrls.current[targetSlot] = product.imageData;
         setBgList(cur => { const n = [...cur]; n[targetSlot] = { w: img.width, h: img.height }; return n; });
-        setShowBgs(cur => { const n = [...cur]; n[targetSlot] = autoShowLoadedImages; return n; });
+        setShowBgs(cur => { const n = [...cur]; n[targetSlot] = true; return n; });
 
         /* New saves keep the exact rendered rectangle and pivot. Rebuild the
            transform only after the image dimensions are available. */
@@ -1826,9 +1779,8 @@ export default function App() {
   };
 
   const downloadProduct = async (itemId) => {
-    if (!loggedInUser) { notify("데이터베이스 다운로드는 로그인 후 사용할 수 있습니다.", "err"); return; }
     try {
-      const res = await fetch('/api/products/' + itemId, { headers: adminHeaders() });
+      const res = await fetch('/api/products/' + itemId);
       if (!res.ok) throw new Error();
       const product = await res.json();
       const url = URL.createObjectURL(new Blob([JSON.stringify(product, null, 2)], { type: 'application/json' }));
@@ -2195,8 +2147,8 @@ export default function App() {
           <button onClick={exportCSV} className="rounded-lg bg-gray-200 px-4 py-2 hover:bg-gray-300">Export CSV</button>
           <button onClick={exportPNG} className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700">Export PNG</button>
           <div className="h-6 w-px bg-gray-300"/>
-          <button onClick={()=>{if(!loggedInUser){notify("데이터베이스는 로그인 후 사용할 수 있습니다.","err");setShowLoginModal(true);return;}setShowLibrary(true);fetchLibrary();}} className={`rounded-lg px-4 py-2 font-semibold text-white ${loggedInUser?"bg-indigo-600 hover:bg-indigo-700":"bg-gray-400 hover:bg-gray-500"}`}>{loggedInUser?"Product Library":"🔒 Product Library"}</button>
-          <button onClick={()=>{if(!loggedInUser){notify("데이터베이스 제품 비교는 로그인 후 사용할 수 있습니다.","err");setShowLoginModal(true);return;}setShowCoordination(true);fetchLibrary();}} className={`rounded-lg px-4 py-2 font-semibold text-white ${loggedInUser?"bg-emerald-600 hover:bg-emerald-700":"bg-gray-400 hover:bg-gray-500"}`}>{loggedInUser?"Selection Check":"🔒 Selection Check"}</button>
+          <button onClick={()=>{setShowLibrary(true);fetchLibrary();}} className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700">Product Library</button>
+          <button onClick={()=>{setShowCoordination(true);fetchLibrary();}} className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700">Selection Check</button>
           <div className="h-6 w-px bg-gray-300"/>
           {loggedInUser?(
             <div className="flex items-center gap-2">
@@ -2249,15 +2201,12 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                       <button type="button" onClick={()=>fileRefs.current[activeBg]?.click()} className="rounded bg-gray-800 py-1.5 text-xs font-semibold text-white hover:bg-gray-700">
                         파일에서 불러오기 ({BG_LABELS[activeBg]})
                       </button>
                       <button type="button" onClick={()=>captureScreenToSlot(activeBg)} className="rounded border border-emerald-700 bg-emerald-600 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
                         화면·창 캡처
-                      </button>
-                      <button type="button" disabled={!bgList[activeBg]} onClick={()=>deleteImageFromSlot(activeBg)} className="rounded border border-red-300 bg-red-50 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40">
-                        이미지 삭제 ({BG_LABELS[activeBg]})
                       </button>
                     </div>
                     <p className="text-[9px] leading-snug text-gray-500">
@@ -2774,14 +2723,7 @@ export default function App() {
                 <h2 className="text-base font-bold text-gray-900">Product Library</h2>
                 <p className="mt-0.5 text-[10px] text-gray-500">여러 제품을 슬롯에 연속으로 불러온 뒤 × 버튼으로 닫으세요.</p>
               </div>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11px] font-semibold text-indigo-900">
-                  <input type="checkbox" checked={autoShowLoadedImages} onChange={e=>setAutoShowLoadedImages(e.target.checked)}/>
-                  불러온 이미지 자동 표시
-                  <span className="font-normal text-indigo-500">({autoShowLoadedImages?"ON":"OFF · 곡선만 표시"})</span>
-                </label>
-                <button type="button" aria-label="Product Library 닫기" onClick={()=>setShowLibrary(false)} className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-2xl font-bold leading-none text-gray-600 hover:bg-red-100 hover:text-red-700">×</button>
-              </div>
+              <button type="button" aria-label="Product Library 닫기" onClick={()=>setShowLibrary(false)} className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-2xl font-bold leading-none text-gray-600 hover:bg-red-100 hover:text-red-700">×</button>
             </div>
             {!serverAvail?(
               <div className="p-10 text-center text-gray-500 text-sm space-y-3">
