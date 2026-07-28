@@ -88,6 +88,7 @@ type CalPickKey = "x1" | "x2" | "y1" | "y2" | null;
 type CalPixel = { px: number; py: number } | null;
 type CalPixels = { x1: CalPixel; x2: CalPixel; y1: CalPixel; y2: CalPixel };
 type CalValues = { x1: string; x2: string; y1: string; y2: string };
+type PointRef = { seriesIndex: number; pointIndex: number };
 
 type AppState = {
   xMin: number; xMax: number; yMin: number; yMax: number;
@@ -163,13 +164,14 @@ export default function App() {
 
   const [activeSeries, setActiveSeries] = useState(0);
   const [selectedPoint, setSelectedPoint] = useState(null);
+  const [selectedPoints, setSelectedPoints] = useState<PointRef[]>([]);
   const selectSlot = (i: number) => {
     setActiveSeries(i);
     if (i < MAX_BG) {
       setActiveBg(i);
-      setShowBgs(prev => prev.map((_, j) => j === i));
     }
     setSelectedPoint(null);
+    setSelectedPoints([]);
   };
 
   const [connectLines, setConnectLines] = useState(true);
@@ -706,37 +708,52 @@ export default function App() {
     const onKey = e => {
       const tag = String(e.target?.tagName ?? "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
-      if (e.key === "Escape") { setPickAnchor(false); setSelectedPoint(null); setCalPick(null); setSelectedCalPoint(null); }
-      if (e.key === "Delete" && selectedPoint) {
+      if (e.key === "Escape") { setPickAnchor(false); setSelectedPoint(null); setSelectedPoints([]); setCalPick(null); setSelectedCalPoint(null); }
+      const pointsToEdit = selectedPoints.length ? selectedPoints : (selectedPoint ? [selectedPoint] : []);
+      if (e.key === "Delete" && pointsToEdit.length) {
         e.preventDefault();
-        const { seriesIndex, pointIndex } = selectedPoint;
+        const selectedKeys = new Set(pointsToEdit.map(point => `${point.seriesIndex}:${point.pointIndex}`));
         updateState(prev => ({
           ...prev,
-          series: prev.series.map((s, si) => {
-            if (si !== seriesIndex) return s;
-            const basePoints = s.basePoints?.length === s.points.length
-              ? s.basePoints.filter((_, pi) => pi !== pointIndex)
-              : s.basePoints;
-            return { ...s, points: s.points.filter((_, pi) => pi !== pointIndex), basePoints };
+          series: prev.series.map((s, seriesIndex) => {
+            const keep = (_, pointIndex) => !selectedKeys.has(`${seriesIndex}:${pointIndex}`);
+            const basePoints = s.basePoints?.length === s.points.length ? s.basePoints.filter(keep) : s.basePoints;
+            return { ...s, points: s.points.filter(keep), basePoints };
           }),
         }));
         setSelectedPoint(null);
-        notify("선택한 포인트를 삭제했습니다.");
+        setSelectedPoints([]);
+        notify(`선택한 포인트 ${pointsToEdit.length}개를 삭제했습니다.`);
         return;
       }
       const arrows = ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"];
       if (!arrows.includes(e.key)) return;
       e.preventDefault();
-      if (selectedPoint) {
-        const { seriesIndex, pointIndex } = selectedPoint;
-        const pt = currentState.series[seriesIndex].points[pointIndex];
-        const { px, py } = dataToPixel(pt.x, pt.y);
+      if (pointsToEdit.length) {
         const step = e.shiftKey ? 10 : 1;
-        let nx = px, ny = py;
-        if (e.key === "ArrowLeft") nx -= step; if (e.key === "ArrowRight") nx += step;
-        if (e.key === "ArrowUp") ny -= step;   if (e.key === "ArrowDown") ny += step;
-        const nd = pixelToData(nx, ny);
-        updateState(prev => ({ ...prev, series: prev.series.map((s, si) => si !== seriesIndex ? s : { ...s, points: s.points.map((p, pi) => pi === pointIndex ? nd : p) }) }));
+        const selectedKeys = new Set(pointsToEdit.map(point => `${point.seriesIndex}:${point.pointIndex}`));
+        let magnifierPoint = null;
+        updateState(prev => ({ ...prev, series: prev.series.map((s, seriesIndex) => ({ ...s, points: s.points.map((point, pointIndex) => {
+          if (!selectedKeys.has(`${seriesIndex}:${pointIndex}`)) return point;
+          const pixel = dataToPixel(point.x, point.y);
+          const moved = pixelToData(
+            pixel.px + (e.key==="ArrowLeft"?-step:e.key==="ArrowRight"?step:0),
+            pixel.py + (e.key==="ArrowUp"?-step:e.key==="ArrowDown"?step:0),
+          );
+          if (selectedPoint?.seriesIndex===seriesIndex && selectedPoint?.pointIndex===pointIndex) magnifierPoint=moved;
+          return moved;
+        }) })) }));
+        const follow = magnifierPoint ?? (() => {
+          const first=pointsToEdit[0], point=currentState.series[first.seriesIndex]?.points[first.pointIndex];
+          if(!point) return null;
+          const pixel=dataToPixel(point.x,point.y);
+          return pixelToData(
+            pixel.px + (e.key==="ArrowLeft"?-step:e.key==="ArrowRight"?step:0),
+            pixel.py + (e.key==="ArrowUp"?-step:e.key==="ArrowDown"?step:0),
+          );
+        })();
+        if (follow) hoverRef.current={x:follow.x,y:follow.y};
+        setTick(t=>t+1);
         return;
       }
       if (selectedCalPoint) {
@@ -776,7 +793,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedPoint, selectedCalPoint, bgEditMode, activeBg, activeSeries, currentState, calPixels]);
+  }, [selectedPoint, selectedPoints, selectedCalPoint, bgEditMode, activeBg, activeSeries, currentState, calPixels]);
 
   const cursorForHandle = (handle, bgEdit, picking, calPicking) => {
     if (calPicking) return "crosshair";
@@ -1101,7 +1118,8 @@ export default function App() {
           const P=dataToPixel(p.x,p.y);
           ctx.beginPath(); ctx.arc(P.px,P.py,ptRadius,0,Math.PI*2); ctx.fill();
           if (ptRadius>=3) { ctx.lineWidth=1; ctx.stroke(); }
-          if (selectedPoint?.seriesIndex===si&&selectedPoint?.pointIndex===pi) {
+          if (selectedPoints.some(point=>point.seriesIndex===si&&point.pointIndex===pi) ||
+              (selectedPoint?.seriesIndex===si&&selectedPoint?.pointIndex===pi)) {
             ctx.strokeStyle="#2563EB"; ctx.lineWidth=2.5;
             ctx.beginPath(); ctx.arc(P.px,P.py,ptRadius+3,0,Math.PI*2); ctx.stroke();
           }
@@ -1214,7 +1232,7 @@ export default function App() {
     }
   }, [currentState,activeBg,bgList,showBgs,opacityBgs,keepAspect,anchorMode,pickAnchor,bgEditMode,hoverHandle,
       showPoints,connectLines,lineAlpha,lineWidth,smoothLines,smoothAlpha,ptRadius,
-      guideXs,guideYs,showCrossFromX,showCrossFromY,magnifyOn,selectedPoint,tick,minBreakCurrents,
+      guideXs,guideYs,showCrossFromX,showCrossFromY,magnifyOn,selectedPoint,selectedPoints,tick,minBreakCurrents,
       calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,calPick,selectedCalPoint,showIntersectionMarkers]);
 
   /* I2t graph render */
@@ -1380,16 +1398,26 @@ export default function App() {
       };
       window.addEventListener("mousemove", winMove);
       window.addEventListener("mouseup",   winUp);
-      setSelectedPoint(null); return;
+      setSelectedPoint(null); setSelectedPoints([]); return;
     }
     if (inPlot(px,py)) {
       for (let si=0;si<currentState.series.length;si++) {
         for (let pi=0;pi<currentState.series[si].points.length;pi++) {
           const p=currentState.series[si].points[pi]; const {px:ppx,py:ppy}=dataToPixel(p.x,p.y);
           if (Math.hypot(px-ppx,py-ppy)<ptRadius+4) {
-            const isSamePoint = selectedPoint?.seriesIndex === si && selectedPoint?.pointIndex === pi;
-            setSelectedPoint(isSamePoint ? null : { seriesIndex: si, pointIndex: pi });
-            if (isSamePoint) notify("점 선택 해제 — 화살표 키로 전체 곡선을 이동할 수 있습니다");
+            const isSelected = selectedPoints.some(point=>point.seriesIndex===si&&point.pointIndex===pi);
+            if (isSelected) {
+              const remaining=selectedPoints.filter(point=>!(point.seriesIndex===si&&point.pointIndex===pi));
+              setSelectedPoints(remaining);
+              setSelectedPoint(remaining.at(-1)??null);
+              notify(`점 선택 해제 · ${remaining.length}개 선택됨`);
+            } else {
+              const added={seriesIndex:si,pointIndex:pi};
+              setSelectedPoints(prev=>[...prev,added]);
+              setSelectedPoint(added);
+              hoverRef.current={x:p.x,y:p.y};
+              notify(`점 ${selectedPoints.length+1}개 선택 · 화살표로 함께 이동`);
+            }
             return;
           }
         }
@@ -1397,6 +1425,7 @@ export default function App() {
       const d=pixelToData(px,py);
       updateState(prev=>({...prev,series:prev.series.map((s,i)=>i===activeSeries?{...s,points:[...s.points,d].sort((a,b)=>a.x-b.x)}:s)}));
       setSelectedPoint(null);
+      setSelectedPoints([]);
     }
   };
   const onMouseUp    = () => { dragRef.current.active=false; resizeRef.current.active=false; };
@@ -2216,8 +2245,7 @@ export default function App() {
                       <input key={i} ref={el=>{fileRefs.current[i]=el;}} type="file" accept="image/*" hidden onChange={e=>{const f=e.target.files?.[0];if(f)onFile(f,i);e.target.value="";}}/>
                     ))}
                     <div className="grid grid-cols-2 gap-2">
-                      <label className="flex items-center justify-between">Show <input type="checkbox" className="h-3 w-3" checked={showBgs[activeBg]} onChange={e=>setShowBgs(cur=>{const n=[...cur];n[activeBg]=e.target.checked;return n;})}/></label>
-                      <label className="flex items-center gap-1">Opacity <input className="w-20" type="range" min={0} max={1} step={0.05} value={opacityBgs[activeBg]} onChange={e=>setOpacityBgs(cur=>{const n=[...cur];n[activeBg]=Number(e.target.value);return n;})}/></label>
+                      <label className="col-span-2 flex items-center gap-2">Opacity <input className="w-full" type="range" min={0} max={1} step={0.05} value={opacityBgs[activeBg]} onChange={e=>setOpacityBgs(cur=>{const n=[...cur];n[activeBg]=Number(e.target.value);return n;})}/></label>
                       <label className="col-span-2 flex items-center gap-2"><input type="checkbox" className="h-3 w-3" checked={keepAspect} onChange={e=>setKeepAspect(e.target.checked)}/> Keep Ratio</label>
                       <div className="col-span-2 grid grid-cols-2 gap-2">
                         <button onClick={()=>{setCalPick(null);snapPreviewRef.current=null;setPickAnchor(v=>!v);}} className={`rounded bg-gray-200 px-2 py-1 text-xs ${pickAnchor?"bg-orange-100 text-orange-800":""}`}>{pickAnchor?"Click pivot point...":"Set Pivot"}</button>
@@ -2314,6 +2342,7 @@ export default function App() {
                           <input type="color" className="h-6 w-6 cursor-pointer rounded border-0 p-0" value={s.color} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,color:e.target.value}:ss)}))}/>
                           <input className="flex-1 rounded border px-1.5 py-0.5 text-xs" value={s.name} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,name:e.target.value}:ss)}))} placeholder={"Series "+(i+1)}/>
                           <label className="flex items-center gap-1 text-[10px]" title="곡선 표시/숨김"><input type="checkbox" checked={s.visible!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,visible:e.target.checked}:ss)}))}/>선</label>
+                          {i<MAX_BG&&<label className={`flex items-center gap-1 text-[10px] ${bgList[i]?"":"text-gray-300"}`} title="배경 이미지 표시/숨김"><input type="checkbox" disabled={!bgList[i]} checked={!!bgList[i]&&showBgs[i]} onChange={e=>setShowBgs(cur=>{const n=[...cur];n[i]=e.target.checked;return n;})}/>이미지</label>}
                           <label className="flex items-center gap-1 text-[10px]" title="이 제품의 교차선 표시"><input type="checkbox" checked={s.crossLines!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,crossLines:e.target.checked}:ss)}))}/>교차선</label>
                           {currentState.series.length>1&&(
                             <button className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 hover:bg-red-200"
@@ -2448,6 +2477,7 @@ export default function App() {
                   <div className="text-xs font-semibold">
                     Points — <span style={{color:currentState.series[activeSeries]?.color}}>{currentState.series[activeSeries]?.name}</span>
                     <span className="ml-1 text-gray-400">({currentState.series[activeSeries]?.points.length})</span>
+                    {selectedPoints.length>0&&<span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">{selectedPoints.length}개 선택 · 화살표 이동</span>}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <label className="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer">
@@ -2477,7 +2507,8 @@ export default function App() {
                     <tbody>
                       {/* 기존 포인트 행 */}
                       {(currentState.series[activeSeries]?.points ?? []).map((p, idx) => {
-                        const isSelected = selectedPoint?.seriesIndex===activeSeries && selectedPoint?.pointIndex===idx;
+                        const isSelected = selectedPoints.some(point=>point.seriesIndex===activeSeries&&point.pointIndex===idx) ||
+                          (selectedPoint?.seriesIndex===activeSeries && selectedPoint?.pointIndex===idx);
                         const cellCls = "w-full text-right font-mono text-xs bg-transparent focus:bg-blue-50 focus:outline-none px-1 py-0.5";
                         return (
                           <tr key={idx} className={`border-b border-gray-100 ${isSelected ? "bg-blue-50" : "hover:bg-gray-50"}`}>
@@ -2489,7 +2520,7 @@ export default function App() {
                                 data-ptseries={activeSeries} data-ptrow={idx} data-ptcol={0}
                                 onChange={e => setRawEdits(prev => ({...prev, [ptEditKey(idx,0)]: e.target.value}))}
                                 onBlur={() => commitCell(idx, 0)}
-                                onFocus={() => setSelectedPoint({seriesIndex:activeSeries, pointIndex:idx})}
+                                onFocus={() => {const point={seriesIndex:activeSeries,pointIndex:idx};setSelectedPoint(point);setSelectedPoints([point]);}}
                                 onKeyDown={e => handlePtKeyDown(e, idx, 0)}
                                 onPaste={e => handlePtPaste(e, idx, 0)}
                               />
@@ -2501,7 +2532,7 @@ export default function App() {
                                 data-ptseries={activeSeries} data-ptrow={idx} data-ptcol={1}
                                 onChange={e => setRawEdits(prev => ({...prev, [ptEditKey(idx,1)]: e.target.value}))}
                                 onBlur={() => commitCell(idx, 1)}
-                                onFocus={() => setSelectedPoint({seriesIndex:activeSeries, pointIndex:idx})}
+                                onFocus={() => {const point={seriesIndex:activeSeries,pointIndex:idx};setSelectedPoint(point);setSelectedPoints([point]);}}
                                 onKeyDown={e => handlePtKeyDown(e, idx, 1)}
                                 onPaste={e => handlePtPaste(e, idx, 1)}
                               />
@@ -2509,7 +2540,7 @@ export default function App() {
                             <td className="px-0.5 text-center">
                               <button className="rounded px-1 py-0.5 text-[10px] text-gray-300 hover:bg-red-100 hover:text-red-500"
                                 tabIndex={-1}
-                                onClick={()=>{updateState(prev=>({...prev,series:prev.series.map((s,si)=>si!==activeSeries?s:({...s,points:s.points.filter((_,pi)=>pi!==idx)}))}));setTick(t=>t+1);}}>✕</button>
+                                onClick={()=>{updateState(prev=>({...prev,series:prev.series.map((s,si)=>si!==activeSeries?s:({...s,points:s.points.filter((_,pi)=>pi!==idx)}))}));setSelectedPoint(null);setSelectedPoints([]);setTick(t=>t+1);}}>✕</button>
                             </td>
                           </tr>
                         );
