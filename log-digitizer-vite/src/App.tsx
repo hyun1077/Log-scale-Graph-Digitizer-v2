@@ -2197,19 +2197,19 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-100 text-gray-800 font-sans antialiased">
-      <header className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/80 p-4 backdrop-blur-sm">
-        <h1 className="text-xl font-bold text-gray-900">Log-scale Graph Digitizer</h1>
-        <div className="flex flex-wrap items-center gap-3 text-base">
-          <button onClick={()=>updateState(p=>({...p,series:p.series.map((s,i)=>i===activeSeries?{...s,points:[]}:s)}))} className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active</button>
+      <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-slate-200 bg-white/90 px-4 py-2.5 shadow-sm backdrop-blur">
+        <h1 className="whitespace-nowrap text-lg font-extrabold tracking-tight text-slate-900">Log-scale Graph Digitizer</h1>
+        <div className="flex flex-wrap items-center justify-end gap-2 text-sm">
+          <button onClick={()=>updateState(p=>({...p,series:p.series.map((s,i)=>i===activeSeries?{...s,points:[]}:s)}))} className="rounded-lg bg-red-50 px-3 py-2 font-semibold text-red-700 hover:bg-red-100">Clear Active</button>
           <div className="h-6 w-px bg-gray-300"/>
-          <button onClick={handleUndo} title="Undo" aria-label="Undo" disabled={historyIndex<=0} className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-200 text-2xl font-bold hover:bg-gray-300 disabled:opacity-50">↶</button>
-          <button onClick={handleRedo} title="Redo" aria-label="Redo" disabled={historyIndex>=history.length-1} className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-200 text-2xl font-bold hover:bg-gray-300 disabled:opacity-50">↷</button>
+          <button onClick={handleUndo} title="Undo" aria-label="Undo" disabled={historyIndex<=0} className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-xl font-bold hover:bg-slate-200 disabled:opacity-40">↶</button>
+          <button onClick={handleRedo} title="Redo" aria-label="Redo" disabled={historyIndex>=history.length-1} className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-xl font-bold hover:bg-slate-200 disabled:opacity-40">↷</button>
           <div className="h-6 w-px bg-gray-300"/>
-          <button onClick={exportCSV} className="rounded-lg bg-gray-200 px-4 py-2 hover:bg-gray-300">Export CSV</button>
-          <button onClick={exportPNG} className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700">Export PNG</button>
+          <button onClick={exportCSV} className="rounded-lg bg-slate-100 px-3 py-2 hover:bg-slate-200">CSV</button>
+          <button onClick={exportPNG} className="rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white hover:bg-blue-700">PNG</button>
           <div className="h-6 w-px bg-gray-300"/>
-          <button onClick={()=>{setShowLibrary(true);fetchLibrary();}} className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700">Product Library</button>
-          <button onClick={()=>{setShowCoordination(true);fetchLibrary();}} className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700">Selection Check</button>
+          <button onClick={()=>{setShowLibrary(true);fetchLibrary();}} className="rounded-lg bg-indigo-600 px-3 py-2 font-semibold text-white hover:bg-indigo-700">Product Library</button>
+          <button onClick={()=>{setShowCoordination(true);fetchLibrary();}} className="rounded-lg bg-emerald-600 px-3 py-2 font-semibold text-white hover:bg-emerald-700">Selection Check</button>
           <div className="h-6 w-px bg-gray-300"/>
           {loggedInUser?(
             <div className="flex items-center gap-2">
@@ -2223,9 +2223,9 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`grid grid-cols-1 gap-3 p-3 ${sidebarCollapsed?"lg:grid-cols-[60px,1fr]":(loggedInUser&&showI2tGraph)?"lg:grid-cols-[280px,1fr,1fr]":"lg:grid-cols-[280px,1fr]"}`}>
+      <main className={`grid grid-cols-1 gap-4 p-4 ${sidebarCollapsed?"lg:grid-cols-[64px,minmax(0,1fr)]":(loggedInUser&&showI2tGraph)?"lg:grid-cols-[370px,minmax(0,1fr),minmax(0,1fr)]":"lg:grid-cols-[370px,minmax(0,1fr)]"}`}>
         {/* Sidebar */}
-        <aside className={`flex flex-col gap-2 ${sidebarCollapsed?"items-center":""}`}>
+        <aside className={`flex flex-col gap-3 ${sidebarCollapsed?"items-center":"lg:sticky lg:top-[68px] lg:max-h-[calc(100vh-84px)] lg:overflow-y-auto lg:pr-1"}`}>
           {sidebarCollapsed?(
             <div className="flex flex-col gap-2">
               <button onClick={()=>setSidebarCollapsed(false)} className="rounded-lg border px-2 py-2 text-xl">{">"}</button>
@@ -2355,29 +2355,17 @@ export default function App() {
                   <label className="flex items-center gap-1 text-xs"><input type="checkbox" className="h-3 w-3" checked={magnifyOn} onChange={e=>setMagnifyOn(e.target.checked)}/> Magnifier</label>
                 </div>
                 <div className="space-y-2 text-xs">
-                  {/* active selector */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-bold">Active:</span>
-                    {currentState.series.map((s,i)=>(
-                      <label key={i} className="flex items-center gap-1">
-                        <input type="radio" className="h-3 w-3" name="series" checked={activeSeries===i} onChange={()=>selectSlot(i)}/>
-                        <span style={{color:s.color}} className="font-bold">{BG_LABELS[i]} · {s.name}</span>
-                      </label>
-                    ))}
-                  </div>
-
                   {/* series list with name / color / min-break */}
                   <div className="grid grid-cols-1 gap-1.5">
                     {currentState.series.map((s,i)=>(
-                      <div key={i} className="flex flex-col gap-0.5 rounded border border-gray-100 p-1">
-                        <div className="flex items-center gap-1">
+                      <div key={i} className={`flex flex-col gap-2 rounded-lg border p-2 transition-colors ${activeSeries===i?"border-blue-300 bg-blue-50/60 shadow-sm":"border-slate-200 bg-white hover:border-slate-300"}`}>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <input type="radio" className="h-4 w-4 flex-none accent-blue-600" name="series" checked={activeSeries===i} onChange={()=>selectSlot(i)}/>
+                          <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md text-[10px] font-black text-white" style={{background:s.color}}>{BG_LABELS[i]}</span>
                           <input type="color" className="h-6 w-6 cursor-pointer rounded border-0 p-0" value={s.color} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,color:e.target.value}:ss)}))}/>
-                          <input className="flex-1 rounded border px-1.5 py-0.5 text-xs" value={s.name} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,name:e.target.value}:ss)}))} placeholder={"Series "+(i+1)}/>
-                          <label className="flex items-center gap-1 text-[10px]" title="곡선 표시/숨김"><input type="checkbox" checked={s.visible!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,visible:e.target.checked}:ss)}))}/>선</label>
-                          {i<MAX_BG&&<label className={`flex items-center gap-1 text-[10px] ${bgList[i]?"":"text-gray-300"}`} title="배경 이미지 표시/숨김"><input type="checkbox" disabled={!bgList[i]} checked={!!bgList[i]&&showBgs[i]} onChange={e=>setShowBgs(cur=>{const n=[...cur];n[i]=e.target.checked;return n;})}/>이미지</label>}
-                          <label className="flex items-center gap-1 text-[10px]" title="이 제품의 교차선 표시"><input type="checkbox" checked={s.crossLines!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,crossLines:e.target.checked}:ss)}))}/>교차선</label>
+                          <input className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold" value={s.name} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,name:e.target.value}:ss)}))} placeholder={"Series "+(i+1)}/>
                           {currentState.series.length>1&&(
-                            <button className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 hover:bg-red-200"
+                            <button className="flex h-6 w-6 flex-none items-center justify-center rounded-md bg-red-50 text-xs font-bold text-red-500 hover:bg-red-100"
                               onClick={()=>{
                                 updateState(p=>({...p,series:p.series.filter((_,si)=>si!==i)}));
                                 setMinBreakCurrents(prev=>prev.filter((_,mi)=>mi!==i));
@@ -2387,11 +2375,14 @@ export default function App() {
                           )}
                         </div>
                         {/* Min breaking current */}
-                        <div className="flex items-center gap-1 pl-1">
-                          <span className="text-[10px] text-gray-500">Min I (dashed below):</span>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-200/80 pt-2">
+                          <label className="flex items-center gap-1.5 text-[10px] font-medium" title="곡선 표시/숨김"><input type="checkbox" checked={s.visible!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,visible:e.target.checked}:ss)}))}/>곡선</label>
+                          {i<MAX_BG&&<label className={`flex items-center gap-1.5 text-[10px] font-medium ${bgList[i]?"":"text-gray-300"}`} title="배경 이미지 표시/숨김"><input type="checkbox" disabled={!bgList[i]} checked={!!bgList[i]&&showBgs[i]} onChange={e=>setShowBgs(cur=>{const n=[...cur];n[i]=e.target.checked;return n;})}/>이미지</label>}
+                          <label className="flex items-center gap-1.5 text-[10px] font-medium" title="이 제품의 교차선 표시"><input type="checkbox" checked={s.crossLines!==false} onChange={e=>updateState(p=>({...p,series:p.series.map((ss,si)=>si===i?{...ss,crossLines:e.target.checked}:ss)}))}/>교차선</label>
+                          <span className="ml-auto text-[10px] text-gray-500">Min I</span>
                           <input
                             type="text"
-                            className="w-20 rounded border px-1 py-0.5 text-[10px] font-mono"
+                            className="w-20 rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[10px] font-mono"
                             placeholder="none"
                             value={minBreakInputs[i]??(minBreakCurrents[i]!=null?String(minBreakCurrents[i]):"")}
                             onChange={e=>{
@@ -2479,7 +2470,7 @@ export default function App() {
 
         <div className={`grid grid-cols-1 gap-3 ${(loggedInUser&&showI2tGraph)?"lg:grid-cols-2":"lg:grid-cols-1"} col-span-1`}>
           {/* Main graph */}
-          <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm">
+          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             {loggedInUser&&<div className="mb-2 flex items-center gap-2">
               <label className="flex items-center gap-2 text-xs font-semibold">
                 <input type="checkbox" className="h-4 w-4" checked={showI2tGraph} onChange={e=>setShowI2tGraph(e.target.checked)}/>
@@ -2491,8 +2482,8 @@ export default function App() {
                 ?<span className="font-mono">Cursor: X={fmtReal(hoverRef.current.x)} , Y={fmtReal(hoverRef.current.y)}</span>
                 :<span>Hover over graph to see coordinates.</span>}
             </div>
-            <div className="overflow-hidden rounded-lg border border-gray-300">
-              <canvas ref={canvasRef} width={size.w} height={size.h} className="block touch-none select-none"
+            <div className="overflow-hidden rounded-xl border border-slate-300 bg-slate-50">
+              <canvas ref={canvasRef} width={size.w} height={size.h} className="block h-auto w-full touch-none select-none"
                 style={{cursor:cursorForHandle(hoverHandle,bgEditMode,pickAnchor,calPick)}}
                 onMouseMove={onMouseMove} onMouseDown={onMouseDown} onMouseUp={onMouseUp} onMouseLeave={onMouseLeave}
                 onDragOver={e=>e.preventDefault()}
@@ -2502,8 +2493,8 @@ export default function App() {
             </div>
 
             {/* Points + Guides row */}
-            <div className="mt-2 grid grid-cols-2 gap-2 border-t border-gray-200 pt-2">
-              <div>
+            <div className="mt-3 grid grid-cols-1 gap-3 border-t border-slate-200 pt-3 xl:grid-cols-[minmax(0,2fr)_minmax(260px,0.8fr)]">
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50/50 p-2">
                 {/* 헤더 */}
                 <div className="mb-1 flex items-center justify-between gap-1">
                   <div className="text-xs font-semibold">
@@ -2617,8 +2608,8 @@ export default function App() {
                 <p className="mt-0.5 text-[10px] text-gray-400">Tab/Enter: 셀 이동 · 마지막 빈 행에서 Enter: 추가 · Ctrl+V: 다중 행 붙여넣기</p>
               </div>
 
-              <div>
-                <div className="mb-1 text-xs font-semibold">Guides</div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+                <div className="mb-2 text-xs font-bold text-slate-700">Guides</div>
                 <div className="flex items-center gap-1">
                   <span className="w-4 text-xs font-semibold text-gray-600">X</span>
                   <input className="flex-grow rounded border px-1.5 py-0.5 text-xs" placeholder="1000" value={guideInput} onChange={e=>setGuideInput(e.target.value)}
