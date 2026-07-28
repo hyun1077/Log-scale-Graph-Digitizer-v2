@@ -64,9 +64,6 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Auth');
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if ((req.method === 'GET' || req.method === 'POST') && !isAdmin(req)) {
-    return res.status(401).json({ error: 'Login required for database access' });
-  }
 
   try {
     const sql = getDb();
