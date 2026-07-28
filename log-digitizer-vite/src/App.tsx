@@ -1395,7 +1395,7 @@ export default function App() {
       notify(`${pickedKey.toUpperCase()} = ${autoValue}`);
       return;
     }
-    if (calEnabled) {
+    if (calEnabled && bgEditMode) {
       const keys = ["x1","x2","y1","y2"];
       for (const k of keys) {
         const p = calPixels[k];
