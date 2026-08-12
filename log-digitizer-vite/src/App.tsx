@@ -1940,6 +1940,57 @@ export default function App() {
   const exportCSV = () => { let out="series,x,y\n"; currentState.series.forEach(s=>s.points.forEach(p=>(out+=s.name+","+p.x+","+p.y+"\n"))); const url=URL.createObjectURL(new Blob([out],{type:"text/csv"})); const a=document.createElement("a"); a.href=url; a.download="points_"+Date.now()+".csv"; a.click(); setTimeout(()=>URL.revokeObjectURL(url),0); };
   const exportPNG  = () => { const c=canvasRef.current; if(!c) return; const a=document.createElement("a"); a.href=c.toDataURL("image/png"); a.download="digitizer_"+Date.now()+".png"; a.click(); };
 
+  /* Datasheet Automation runs on a different origin.  The explicit import
+     query flag and opener check keep ordinary browsing sessions isolated,
+     while postMessage lets us receive large image data without URL limits. */
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get("import") !== "datasheet" || !window.opener) return;
+    const allowedOrigins = new Set([
+      "http://127.0.0.1:8765",
+      "http://localhost:8765",
+    ]);
+    let imported = false;
+    const receiveDatasheet = (event: MessageEvent) => {
+      if (imported) return;
+      if (event.source !== window.opener || !allowedOrigins.has(event.origin)) return;
+      const payload = event.data;
+      if (!payload || payload.type !== "datasheet-automation-import" || payload.version !== 1) return;
+      imported = true;
+      const axes = payload.axes ?? {};
+      const importedSeries = Array.isArray(payload.series) && payload.series.length
+        ? payload.series.slice(0, MAX_SERIES).map((series, index) => ({
+            name: String(series.name || payload.document?.filename || `Series ${index + 1}`),
+            color: seriesColor(index),
+            points: Array.isArray(series.points)
+              ? series.points.filter(point => Number(point?.x) > 0 && Number(point?.y) > 0).map(point => ({ x: Number(point.x), y: Number(point.y) }))
+              : [],
+            visible: true,
+            crossLines: true,
+            specs: { ...EMPTY_PRODUCT_SPECS },
+          }))
+        : [{ name: String(payload.document?.filename || "Imported datasheet"), color: seriesColor(0), points: [], visible: true, crossLines: true, specs: { ...EMPTY_PRODUCT_SPECS } }];
+      applyPreset({
+        axes: {
+          xMin: Number(axes.xMin) || 100,
+          xMax: Number(axes.xMax) || 100000,
+          yMin: Number(axes.yMin) || 0.0001,
+          yMax: Number(axes.yMax) || 1000,
+          xLog: axes.xLog !== false,
+          yLog: axes.yLog !== false,
+        },
+        series: importedSeries,
+        bg: { activeBg: 0, keepAspect: true, showBgs: [true], opacityBgs: [0.55] },
+      });
+      if (typeof payload.tcImageData === "string" && payload.tcImageData.startsWith("data:image/")) loadImageFromSrc(0, payload.tcImageData);
+      try { sessionStorage.setItem("digitizer:last-datasheet", JSON.stringify({ document: payload.document, productImageData: payload.productImageData ?? null })); } catch {}
+      notify(`${payload.document?.filename || "Datasheet"} 불러오기 완료`);
+      (event.source as Window).postMessage({ type: "datasheet-digitizer-imported" }, event.origin);
+    };
+    window.addEventListener("message", receiveDatasheet);
+    window.opener.postMessage({ type: "datasheet-digitizer-ready" }, "*");
+    return () => window.removeEventListener("message", receiveDatasheet);
+  }, []);
+
   useEffect(() => {
     const h=location.hash||"";
     if (h.startsWith("#s=")) { try{applyPreset(JSON.parse(decodeURIComponent(escape(atob(h.slice(3))))));return;}catch{} }
