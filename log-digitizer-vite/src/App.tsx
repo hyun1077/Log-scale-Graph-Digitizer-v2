@@ -580,27 +580,30 @@ export default function App() {
 
   /* image load — 파일·캡처·URL 등 data URL / blob URL 공통 */
   const loadImageFromSrc = (idx, src) => {
-    const img = new Image(); img.crossOrigin = "anonymous";
-    img.onload = () => {
-      bgRefs.current[idx] = img; bgUrls.current[idx] = src;
-      updateState(prev => {
-        const bgXform = [...prev.bgXform];
-        const customAnchors = [...prev.customAnchors];
-        bgXform[idx] = { sx: 1, sy: 1, offX: 0, offY: 0 };
-        customAnchors[idx] = null;
-        return { ...prev, bgXform, customAnchors };
-      });
-      setBgList(cur => { const n = [...cur]; n[idx] = { w: img.width, h: img.height }; return n; });
-      setShowBgs(cur => { const n = [...cur]; n[idx] = true; return n; });
-      setOpacityBgs(cur => { const n = [...cur]; if (!(n[idx] > 0)) n[idx] = BG_DEFAULT_OPACITY[idx] ?? 1; return n; });
-      setCalEnabledForBg(idx, false);
-      setCalClipForBg(idx, false);
-      setCalPixelsForBg(idx, { x1: null, x2: null, y1: null, y2: null });
-      setCalValuesForBg(idx, { x1: "", x2: "", y1: "", y2: "" });
-      setTick(t => t + 1);
-    };
-    img.onerror = () => notify("Image load failed", "err");
-    img.src = src;
+    return new Promise<boolean>(resolve => {
+      const img = new Image(); img.crossOrigin = "anonymous";
+      img.onload = () => {
+        bgRefs.current[idx] = img; bgUrls.current[idx] = src;
+        updateState(prev => {
+          const bgXform = [...prev.bgXform];
+          const customAnchors = [...prev.customAnchors];
+          bgXform[idx] = { sx: 1, sy: 1, offX: 0, offY: 0 };
+          customAnchors[idx] = null;
+          return { ...prev, bgXform, customAnchors };
+        });
+        setBgList(cur => { const n = [...cur]; n[idx] = { w: img.width, h: img.height }; return n; });
+        setShowBgs(cur => { const n = [...cur]; n[idx] = true; return n; });
+        setOpacityBgs(cur => { const n = [...cur]; if (!(n[idx] > 0)) n[idx] = BG_DEFAULT_OPACITY[idx] ?? 1; return n; });
+        setCalEnabledForBg(idx, false);
+        setCalClipForBg(idx, false);
+        setCalPixelsForBg(idx, { x1: null, x2: null, y1: null, y2: null });
+        setCalValuesForBg(idx, { x1: "", x2: "", y1: "", y2: "" });
+        setTick(t => t + 1);
+        resolve(true);
+      };
+      img.onerror = () => { notify("Image load failed", "err"); resolve(false); };
+      img.src = src;
+    });
   };
 
   const onFile = (file, idx) => {
@@ -1944,17 +1947,26 @@ export default function App() {
      query flag and opener check keep ordinary browsing sessions isolated,
      while postMessage lets us receive large image data without URL limits. */
   useEffect(() => {
-    if (new URLSearchParams(location.search).get("import") !== "datasheet" || !window.opener) return;
-    const allowedOrigins = new Set([
-      "http://127.0.0.1:8765",
-      "http://localhost:8765",
-    ]);
+    if (!currentState || new URLSearchParams(location.search).get("import") !== "datasheet" || !window.opener) return;
+    const params = new URLSearchParams(location.search);
+    const requestedSourceOrigin = params.get("sourceOrigin");
+    let sourceOrigin = "";
+    try { sourceOrigin = requestedSourceOrigin ? new URL(requestedSourceOrigin).origin : ""; } catch {}
+    const sourceUrl = sourceOrigin ? new URL(sourceOrigin) : null;
+    const sourceIsLocal = !!sourceUrl && ["localhost", "127.0.0.1", "::1"].includes(sourceUrl.hostname) && ["http:", "https:"].includes(sourceUrl.protocol);
+    if (!sourceIsLocal) return;
+    const requestedImportId = params.get("handoff") || "";
     let imported = false;
-    const receiveDatasheet = (event: MessageEvent) => {
+    const receiveDatasheet = async (event: MessageEvent) => {
       if (imported) return;
-      if (event.source !== window.opener || !allowedOrigins.has(event.origin)) return;
+      if (event.source !== window.opener || event.origin !== sourceOrigin) return;
       const payload = event.data;
       if (!payload || payload.type !== "datasheet-automation-import" || payload.version !== 1) return;
+      if (requestedImportId && payload.importId !== requestedImportId) return;
+      if (typeof payload.tcImageData !== "string" || !payload.tcImageData.startsWith("data:image/")) {
+        (event.source as Window).postMessage({ type: "datasheet-digitizer-import-failed", importId: payload.importId, message: "TC 이미지가 없습니다." }, event.origin);
+        return;
+      }
       imported = true;
       const axes = payload.axes ?? {};
       const importedSeries = Array.isArray(payload.series) && payload.series.length
@@ -1981,21 +1993,28 @@ export default function App() {
         series: importedSeries,
         bg: { activeBg: 0, keepAspect: true, showBgs: [true], opacityBgs: [0.55] },
       });
-      if (typeof payload.tcImageData === "string" && payload.tcImageData.startsWith("data:image/")) loadImageFromSrc(0, payload.tcImageData);
+      const imageLoaded = await loadImageFromSrc(0, payload.tcImageData);
+      if (!imageLoaded) {
+        imported = false;
+        (event.source as Window).postMessage({ type: "datasheet-digitizer-import-failed", importId: payload.importId, message: "TC 이미지를 불러오지 못했습니다." }, event.origin);
+        return;
+      }
       try { sessionStorage.setItem("digitizer:last-datasheet", JSON.stringify({ document: payload.document, productImageData: payload.productImageData ?? null })); } catch {}
-      notify(`${payload.document?.filename || "Datasheet"} 불러오기 완료`);
-      (event.source as Window).postMessage({ type: "datasheet-digitizer-imported" }, event.origin);
+      const pointCount = importedSeries.reduce((sum, series) => sum + series.points.length, 0);
+      notify(pointCount ? `${payload.document?.filename || "Datasheet"} · 좌표 ${pointCount}개 불러오기 완료` : `${payload.document?.filename || "Datasheet"} · 이미지 불러오기 완료 (수동 좌표 입력)`);
+      (event.source as Window).postMessage({ type: "datasheet-digitizer-imported", importId: payload.importId, pointCount, imageLoaded: true }, event.origin);
     };
     window.addEventListener("message", receiveDatasheet);
-    window.opener.postMessage({ type: "datasheet-digitizer-ready" }, "*");
+    window.opener.postMessage({ type: "datasheet-digitizer-ready", importId: requestedImportId }, sourceOrigin);
     return () => window.removeEventListener("message", receiveDatasheet);
-  }, []);
+  }, [Boolean(currentState)]);
 
   useEffect(() => {
+    if (!currentState) return;
     const h=location.hash||"";
     if (h.startsWith("#s=")) { try{applyPreset(JSON.parse(decodeURIComponent(escape(atob(h.slice(3))))));return;}catch{} }
     try{const raw=localStorage.getItem("digitizer:auto");if(raw)applyPreset(JSON.parse(raw));}catch{}
-  }, []);
+  }, [Boolean(currentState)]);
   useEffect(() => { try{localStorage.setItem("digitizer:auto",JSON.stringify(serialize()));}catch{} }, [currentState,guideXs,guideYs,showCrossFromX,showCrossFromY,keepAspect,showBgs,opacityBgs,activeBg,calEnabledByBg,calClipByBg,calPixelsByBg,calValuesByBg,showRealCoords,showIntersectionMarkers,magnifyOn]);
 
   if (!currentState) return <div className="flex h-screen items-center justify-center">Loading...</div>;
